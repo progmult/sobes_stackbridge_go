@@ -26,6 +26,7 @@ const (
 	writeTimeout      = 15 * time.Second
 	idleTimeout       = 60 * time.Second
 	shutdownTimeout   = 10 * time.Second
+	migrationTimeout  = 30 * time.Second
 )
 
 //	@title			Subscriptions API
@@ -55,12 +56,16 @@ func run() error {
 	log := newLogger(cfg.LogLevel)
 	slog.SetDefault(log)
 
-	if err := postgres.Migrate(cfg, log); err != nil {
-		return fmt.Errorf("не удалось применить миграции: %w", err)
-	}
-
+	// Контекст сигналов создаётся до миграций, чтобы Ctrl-C прерывал и их тоже.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	migrateCtx, cancelMigrate := context.WithTimeout(ctx, migrationTimeout)
+	defer cancelMigrate()
+
+	if err := postgres.Migrate(migrateCtx, cfg, log); err != nil {
+		return fmt.Errorf("не удалось применить миграции: %w", err)
+	}
 
 	pool, err := postgres.NewPool(ctx, cfg)
 	if err != nil {

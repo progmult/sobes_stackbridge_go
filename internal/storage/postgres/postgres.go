@@ -33,7 +33,13 @@ func NewPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 
 // Migrate накатывает миграции из migrations/ до последней версии.
 // Повторный запуск ничего не меняет.
-func Migrate(cfg *config.Config, log *slog.Logger) error {
+//
+// Контекст ограничивает время миграции: без него недоступная или медленная
+// база подвешивает старт сервиса бессрочно, и снаружи это выглядит зависанием,
+// а не отказом. Повторных попыток здесь нет намеренно: в docker compose их
+// заменяет depends_on с healthcheck, в kubernetes — рестарт пода, который
+// корректно происходит благодаря коду возврата 1.
+func Migrate(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	source, err := iofs.New(migrations.FS, ".")
 	if err != nil {
 		return fmt.Errorf("не удалось прочитать встроенные миграции: %w", err)
@@ -56,14 +62,33 @@ func Migrate(cfg *config.Config, log *slog.Logger) error {
 		}
 	}()
 
-	if err := migrator.Up(); err != nil {
-		if errors.Is(err, migrate.ErrNoChange) {
-			log.Info("схема БД уже в актуальном состоянии")
+	// golang-migrate не принимает контекст в Up, поэтому миграция уходит в
+	// отдельную горутину, а отмена доводится до неё через GracefulStop.
+	done := make(chan error, 1)
 
-			return nil
+	go func() { done <- migrator.Up() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			if errors.Is(err, migrate.ErrNoChange) {
+				log.Info("схема БД уже в актуальном состоянии")
+
+				return nil
+			}
+
+			return fmt.Errorf("не удалось применить миграции: %w", err)
 		}
 
-		return fmt.Errorf("не удалось применить миграции: %w", err)
+	case <-ctx.Done():
+		// Отправка не должна блокироваться: если миграция стоит на запросе,
+		// читать из канала некому.
+		select {
+		case migrator.GracefulStop <- true:
+		default:
+		}
+
+		return fmt.Errorf("миграции не уложились в отведённое время: %w", ctx.Err())
 	}
 
 	log.Info("миграции применены")
