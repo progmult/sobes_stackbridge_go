@@ -238,9 +238,9 @@ func TestListPagination(t *testing.T) {
 		wantLimit  int
 		wantOffset int
 	}{
-		{name: "по умолчанию", query: "", wantStatus: http.StatusOK, wantLimit: model.DefaultLimit},
+		{name: "по умолчанию", query: "", wantStatus: http.StatusOK, wantLimit: rest.DefaultLimit},
 		{name: "заданные значения", query: "?limit=10&offset=20", wantStatus: http.StatusOK, wantLimit: 10, wantOffset: 20},
-		{name: "limit урезается до максимума", query: "?limit=9999", wantStatus: http.StatusOK, wantLimit: model.MaxLimit},
+		{name: "limit урезается до максимума", query: "?limit=9999", wantStatus: http.StatusOK, wantLimit: rest.MaxLimit},
 		{name: "limit=0 отвергается", query: "?limit=0", wantStatus: http.StatusBadRequest},
 		{name: "limit не число", query: "?limit=abc", wantStatus: http.StatusBadRequest},
 		{name: "отрицательный offset", query: "?offset=-1", wantStatus: http.StatusBadRequest},

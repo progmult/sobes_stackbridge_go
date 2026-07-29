@@ -24,12 +24,6 @@ const (
 	MaxPrice = math.MaxInt32
 )
 
-// Ограничения размера страницы списка подписок.
-const (
-	DefaultLimit = 50
-	MaxLimit     = 200
-)
-
 var (
 	// ErrNotFound — записи о подписке нет в базе.
 	ErrNotFound = errors.New("подписка не найдена")
@@ -54,8 +48,8 @@ type Filter struct {
 	ServiceName *string
 }
 
-// Page — постраничная навигация. Значения приходят уже проверенными
-// из транспортного слоя.
+// Page — постраничная навигация. Границы размера страницы задаёт
+// транспортный слой, сюда значения приходят уже проверенными.
 type Page struct {
 	Limit  int
 	Offset int

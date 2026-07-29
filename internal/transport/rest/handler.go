@@ -28,6 +28,13 @@ const (
 	healthTimeout = 2 * time.Second
 )
 
+// Границы размера страницы. Это политика HTTP-слоя, а не доменный инвариант:
+// сколько записей отдавать за раз — вопрос протокола, а не предметной области.
+const (
+	DefaultLimit = 50
+	MaxLimit     = 200
+)
+
 // Pinger проверяет доступность базы данных. Ему удовлетворяет *pgxpool.Pool.
 type Pinger interface {
 	Ping(ctx context.Context) error
@@ -355,7 +362,7 @@ func parseDateParam(r *http.Request, name string) (time.Time, error) {
 // parsePage читает limit и offset, подставляя значения по умолчанию.
 // Слишком большой limit не считается ошибкой, а урезается до максимума.
 func parsePage(r *http.Request) (model.Page, error) {
-	limit, err := intParam(r, "limit", model.DefaultLimit)
+	limit, err := intParam(r, "limit", DefaultLimit)
 	if err != nil {
 		return model.Page{}, err
 	}
@@ -364,8 +371,8 @@ func parsePage(r *http.Request) (model.Page, error) {
 		return model.Page{}, fmt.Errorf("%w: параметр limit должен быть больше нуля", model.ErrValidation)
 	}
 
-	if limit > model.MaxLimit {
-		limit = model.MaxLimit
+	if limit > MaxLimit {
+		limit = MaxLimit
 	}
 
 	offset, err := intParam(r, "offset", 0)
