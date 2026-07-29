@@ -66,6 +66,12 @@
                         "schema": {
                             "$ref": "#/definitions/rest.ErrorResponse"
                         }
+                    },
+                    "504": {
+                        "description": "Gateway Timeout",
+                        "schema": {
+                            "$ref": "#/definitions/rest.ErrorResponse"
+                        }
                     }
                 }
             },
@@ -105,8 +111,26 @@
                             "$ref": "#/definitions/rest.ErrorResponse"
                         }
                     },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/rest.ErrorResponse"
+                        }
+                    },
+                    "415": {
+                        "description": "Unsupported Media Type",
+                        "schema": {
+                            "$ref": "#/definitions/rest.ErrorResponse"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/rest.ErrorResponse"
+                        }
+                    },
+                    "504": {
+                        "description": "Gateway Timeout",
                         "schema": {
                             "$ref": "#/definitions/rest.ErrorResponse"
                         }
@@ -173,6 +197,12 @@
                         "schema": {
                             "$ref": "#/definitions/rest.ErrorResponse"
                         }
+                    },
+                    "504": {
+                        "description": "Gateway Timeout",
+                        "schema": {
+                            "$ref": "#/definitions/rest.ErrorResponse"
+                        }
                     }
                 }
             }
@@ -217,6 +247,12 @@
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/rest.ErrorResponse"
+                        }
+                    },
+                    "504": {
+                        "description": "Gateway Timeout",
                         "schema": {
                             "$ref": "#/definitions/rest.ErrorResponse"
                         }
@@ -272,8 +308,26 @@
                             "$ref": "#/definitions/rest.ErrorResponse"
                         }
                     },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/rest.ErrorResponse"
+                        }
+                    },
+                    "415": {
+                        "description": "Unsupported Media Type",
+                        "schema": {
+                            "$ref": "#/definitions/rest.ErrorResponse"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/rest.ErrorResponse"
+                        }
+                    },
+                    "504": {
+                        "description": "Gateway Timeout",
                         "schema": {
                             "$ref": "#/definitions/rest.ErrorResponse"
                         }
@@ -316,6 +370,12 @@
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/rest.ErrorResponse"
+                        }
+                    },
+                    "504": {
+                        "description": "Gateway Timeout",
                         "schema": {
                             "$ref": "#/definitions/rest.ErrorResponse"
                         }

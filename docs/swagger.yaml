@@ -138,6 +138,10 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/rest.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
       summary: Список подписок
       tags:
       - subscriptions
@@ -163,8 +167,20 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/rest.ErrorResponse'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "415":
+          description: Unsupported Media Type
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
         "500":
           description: Internal Server Error
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "504":
+          description: Gateway Timeout
           schema:
             $ref: '#/definitions/rest.ErrorResponse'
       summary: Создать подписку
@@ -196,6 +212,10 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/rest.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
       summary: Удалить подписку
       tags:
       - subscriptions
@@ -224,6 +244,10 @@ paths:
             $ref: '#/definitions/rest.ErrorResponse'
         "500":
           description: Internal Server Error
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "504":
+          description: Gateway Timeout
           schema:
             $ref: '#/definitions/rest.ErrorResponse'
       summary: Получить подписку
@@ -260,8 +284,20 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/rest.ErrorResponse'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "415":
+          description: Unsupported Media Type
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
         "500":
           description: Internal Server Error
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "504":
+          description: Gateway Timeout
           schema:
             $ref: '#/definitions/rest.ErrorResponse'
       summary: Обновить подписку
@@ -307,6 +343,10 @@ paths:
             $ref: '#/definitions/rest.ErrorResponse'
         "500":
           description: Internal Server Error
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "504":
+          description: Gateway Timeout
           schema:
             $ref: '#/definitions/rest.ErrorResponse'
       summary: Суммарная стоимость подписок

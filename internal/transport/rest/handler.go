@@ -72,7 +72,10 @@ func NewHandler(svc *service.Service, pinger Pinger, log *slog.Logger) *Handler 
 //	@Param			request	body		SubscriptionRequest	true	"Данные подписки"
 //	@Success		201		{object}	SubscriptionResponse
 //	@Failure		400		{object}	ErrorResponse
+//	@Failure		413		{object}	ErrorResponse
+//	@Failure		415		{object}	ErrorResponse
 //	@Failure		500		{object}	ErrorResponse
+//	@Failure		504		{object}	ErrorResponse
 //	@Router			/subscriptions [post]
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	req, err := decodeRequest(w, r)
@@ -111,6 +114,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 //	@Failure		400	{object}	ErrorResponse
 //	@Failure		404	{object}	ErrorResponse
 //	@Failure		500	{object}	ErrorResponse
+//	@Failure		504	{object}	ErrorResponse
 //	@Router			/subscriptions/{id} [get]
 func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 	id, err := subscriptionID(r)
@@ -141,7 +145,10 @@ func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 //	@Success		200		{object}	SubscriptionResponse
 //	@Failure		400		{object}	ErrorResponse
 //	@Failure		404		{object}	ErrorResponse
+//	@Failure		413		{object}	ErrorResponse
+//	@Failure		415		{object}	ErrorResponse
 //	@Failure		500		{object}	ErrorResponse
+//	@Failure		504		{object}	ErrorResponse
 //	@Router			/subscriptions/{id} [put]
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := subscriptionID(r)
@@ -185,6 +192,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 //	@Failure		400	{object}	ErrorResponse
 //	@Failure		404	{object}	ErrorResponse
 //	@Failure		500	{object}	ErrorResponse
+//	@Failure		504	{object}	ErrorResponse
 //	@Router			/subscriptions/{id} [delete]
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := subscriptionID(r)
@@ -216,6 +224,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 //	@Success		200				{object}	ListResponse
 //	@Failure		400				{object}	ErrorResponse
 //	@Failure		500				{object}	ErrorResponse
+//	@Failure		504				{object}	ErrorResponse
 //	@Router			/subscriptions [get]
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	filter, err := parseFilter(r)
@@ -265,6 +274,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 //	@Success		200				{object}	SummaryResponse
 //	@Failure		400				{object}	ErrorResponse
 //	@Failure		500				{object}	ErrorResponse
+//	@Failure		504				{object}	ErrorResponse
 //	@Router			/subscriptions/summary [get]
 func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 	from, err := parseDateParam(r, "from")
@@ -353,38 +363,72 @@ func decodeRequest(w http.ResponseWriter, r *http.Request) (SubscriptionRequest,
 	return req, nil
 }
 
+// clientError разделяет два представления одной ошибки: публичную
+// формулировку для клиента и исходную причину для лога. Наружу уходит только
+// первая, в лог пишутся обе — иначе диагноз теряется безвозвратно.
+type clientError struct {
+	public error
+	cause  error
+}
+
+func (e *clientError) Error() string { return e.public.Error() }
+
+// Unwrap отдаёт обе ошибки, поэтому errors.Is находит и sentinel публичной
+// формулировки, и исходную причину.
+func (e *clientError) Unwrap() []error { return []error{e.public, e.cause} }
+
+// withCause прячет исходную ошибку за публичной формулировкой.
+func withCause(public, cause error) error {
+	if cause == nil {
+		return public
+	}
+
+	return &clientError{public: public, cause: cause}
+}
+
+// causeOf достаёт исходную причину, чтобы записать её в лог.
+func causeOf(err error) error {
+	var clientErr *clientError
+	if errors.As(err, &clientErr) {
+		return clientErr.cause
+	}
+
+	return nil
+}
+
 // decodeError переводит ошибку разбора JSON в сообщение для клиента.
 //
 // Текст ошибки стандартной библиотеки наружу не отдаётся: он на английском и
 // содержит имена Go-структур, их полей и внутренних типов. Клиенту сообщается
-// только то, что относится к его собственному запросу.
+// только то, что относится к его собственному запросу, а исходная ошибка
+// сохраняется как причина и попадает в лог.
 func decodeError(err error) error {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
-		return fmt.Errorf("%w: не более %d КБ", errPayloadTooLarge, tooLarge.Limit/1024)
+		return withCause(fmt.Errorf("%w: не более %d МБ", errPayloadTooLarge, tooLarge.Limit>>20), err)
 	}
 
 	// Field — имя поля из запроса клиента, его показать можно.
 	var typeErr *json.UnmarshalTypeError
 	if errors.As(err, &typeErr) {
-		return fmt.Errorf("%w: поле %q имеет неверный тип", model.ErrValidation, typeErr.Field)
+		return withCause(fmt.Errorf("%w: поле %q имеет неверный тип", model.ErrValidation, typeErr.Field), err)
 	}
 
 	var syntaxErr *json.SyntaxError
 	if errors.As(err, &syntaxErr) {
-		return fmt.Errorf("%w: тело запроса не является корректным JSON (позиция %d)",
-			model.ErrValidation, syntaxErr.Offset)
+		return withCause(fmt.Errorf("%w: тело запроса не является корректным JSON (позиция %d)",
+			model.ErrValidation, syntaxErr.Offset), err)
 	}
 
 	if errors.Is(err, io.EOF) {
-		return fmt.Errorf("%w: тело запроса пустое", model.ErrValidation)
+		return withCause(fmt.Errorf("%w: тело запроса пустое", model.ErrValidation), err)
 	}
 
 	if field, ok := unknownField(err); ok {
-		return fmt.Errorf("%w: неизвестное поле %q", model.ErrValidation, field)
+		return withCause(fmt.Errorf("%w: неизвестное поле %q", model.ErrValidation, field), err)
 	}
 
-	return fmt.Errorf("%w: тело запроса не является корректным JSON", model.ErrValidation)
+	return withCause(fmt.Errorf("%w: тело запроса не является корректным JSON", model.ErrValidation), err)
 }
 
 // unknownField достаёт имя поля из ошибки DisallowUnknownFields. Отдельного
@@ -530,21 +574,21 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		})
 
 	case errors.Is(err, errPayloadTooLarge):
-		log.Warn("тело запроса слишком большое", slog.String("error", err.Error()))
+		log.Warn("тело запроса слишком большое", errorAttrs(err)...)
 		h.writeJSON(w, r, http.StatusRequestEntityTooLarge, ErrorResponse{
 			Code:    "payload_too_large",
 			Message: err.Error(),
 		})
 
 	case errors.Is(err, errUnsupportedMediaType):
-		log.Warn("неподдерживаемый тип содержимого", slog.String("error", err.Error()))
+		log.Warn("неподдерживаемый тип содержимого", errorAttrs(err)...)
 		h.writeJSON(w, r, http.StatusUnsupportedMediaType, ErrorResponse{
 			Code:    "unsupported_media_type",
 			Message: err.Error(),
 		})
 
 	case errors.Is(err, model.ErrValidation):
-		log.Warn("некорректный запрос", slog.String("error", err.Error()))
+		log.Warn("некорректный запрос", errorAttrs(err)...)
 		h.writeJSON(w, r, http.StatusBadRequest, ErrorResponse{
 			Code:    "validation_error",
 			Message: err.Error(),
@@ -564,6 +608,18 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 			Message: "внутренняя ошибка сервиса",
 		})
 	}
+}
+
+// errorAttrs собирает атрибуты для лога: публичную формулировку и, если она
+// прячет исходную ошибку, саму причину. Клиент причины не видит.
+func errorAttrs(err error) []any {
+	attrs := []any{slog.String("error", err.Error())}
+
+	if cause := causeOf(err); cause != nil {
+		attrs = append(attrs, slog.String("cause", cause.Error()))
+	}
+
+	return attrs
 }
 
 // logger добавляет к логгеру идентификатор запроса, чтобы строку об ошибке
