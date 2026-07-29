@@ -336,6 +336,39 @@ func TestErrorMessagesHideInternals(t *testing.T) {
 	}
 }
 
+// Санировать сообщение клиенту — не значит терять диагноз: исходная ошибка
+// разбора обязана дойти до лога, иначе причину сбоя не восстановить.
+func TestDecodeErrorCauseReachesLog(t *testing.T) {
+	var logged bytes.Buffer
+
+	log := slog.New(slog.NewJSONHandler(&logged, nil))
+	router := rest.NewRouter(rest.NewHandler(service.New(&repoStub{}, log), pingerStub{}, log), log)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions",
+		strings.NewReader(`{"service_name":"X","price":"четыреста","user_id":"`+userID+`","start_date":"07-2025"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	var payload rest.ErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("ответ не разобрался как JSON: %v", err)
+	}
+
+	if strings.Contains(payload.Message, "json:") {
+		t.Errorf("исходная ошибка утекла клиенту: %s", payload.Message)
+	}
+
+	if !strings.Contains(logged.String(), "json:") {
+		t.Errorf("исходной ошибки нет в логе: %s", logged.String())
+	}
+
+	if !strings.Contains(logged.String(), `"cause"`) {
+		t.Errorf("причина записана не отдельным атрибутом: %s", logged.String())
+	}
+}
+
 // Тело сверх лимита — это не ошибка данных, клиент должен отличать
 // «уменьши тело» от «исправь поля».
 func TestBodyOverLimitReturns413(t *testing.T) {
