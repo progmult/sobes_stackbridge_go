@@ -1,6 +1,7 @@
 package rest_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -26,6 +27,7 @@ type repoStub struct {
 	page         model.Page
 	notFound     bool
 	panics       bool
+	err          error
 }
 
 func (r *repoStub) Create(_ context.Context, sub *model.Subscription) (*model.Subscription, error) {
@@ -38,6 +40,10 @@ func (r *repoStub) Create(_ context.Context, sub *model.Subscription) (*model.Su
 func (r *repoStub) GetByID(_ context.Context, id uuid.UUID) (*model.Subscription, error) {
 	if r.panics {
 		panic("сбой в хранилище")
+	}
+
+	if r.err != nil {
+		return nil, r.err
 	}
 
 	if r.notFound {
@@ -297,6 +303,140 @@ func TestSummaryRequiresValidPeriod(t *testing.T) {
 	}
 }
 
+// Сообщение клиенту не должно содержать внутренних деталей Go: имён структур,
+// их полей, внутренних типов и английского текста стандартной библиотеки.
+func TestErrorMessagesHideInternals(t *testing.T) {
+	leaks := []string{"SubscriptionRequest", "json:", "http:", "Go struct", "SQLSTATE"}
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "неверный тип поля", body: `{"service_name":"X","price":"четыреста","user_id":"` + userID + `","start_date":"07-2025"}`},
+		{name: "неизвестное поле", body: `{"service_name":"X","price":1,"user_id":"` + userID + `","start_date":"07-2025","end_data":"12-2025"}`},
+		{name: "битый JSON", body: `{"service_name":`},
+		{name: "мусор после объекта", body: body("price", `400`) + ` МУСОР`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := do(t, newRouter(&repoStub{}, pingerStub{}), http.MethodPost, "/api/v1/subscriptions", tt.body)
+
+			var payload rest.ErrorResponse
+			if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("ответ не разобрался как JSON: %v", err)
+			}
+
+			for _, leak := range leaks {
+				if strings.Contains(payload.Message, leak) {
+					t.Errorf("в сообщение утекло %q: %s", leak, payload.Message)
+				}
+			}
+		})
+	}
+}
+
+// Тело сверх лимита — это не ошибка данных, клиент должен отличать
+// «уменьши тело» от «исправь поля».
+func TestBodyOverLimitReturns413(t *testing.T) {
+	huge := `{"service_name":"` + strings.Repeat("a", 2<<20) + `","price":1}`
+
+	resp := do(t, newRouter(&repoStub{}, pingerStub{}), http.MethodPost, "/api/v1/subscriptions", huge)
+
+	if resp.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("код ответа = %d, ожидался 413; тело: %s", resp.Code, resp.Body.String())
+	}
+
+	var payload rest.ErrorResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("ответ не разобрался как JSON: %v", err)
+	}
+
+	if payload.Code != "payload_too_large" {
+		t.Errorf("code = %q, ожидался payload_too_large", payload.Code)
+	}
+}
+
+func TestContentTypeIsChecked(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		wantStatus  int
+	}{
+		{name: "application/json", contentType: "application/json", wantStatus: http.StatusCreated},
+		{name: "с параметром charset", contentType: "application/json; charset=utf-8", wantStatus: http.StatusCreated},
+		{name: "заголовка нет", contentType: "", wantStatus: http.StatusCreated},
+		{name: "чужой тип", contentType: "text/plain", wantStatus: http.StatusUnsupportedMediaType},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", strings.NewReader(body("price", `400`)))
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+
+			recorder := httptest.NewRecorder()
+			newRouter(&repoStub{}, pingerStub{}).ServeHTTP(recorder, req)
+
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("код ответа = %d, ожидался %d; тело: %s", recorder.Code, tt.wantStatus, recorder.Body.String())
+			}
+		})
+	}
+}
+
+// Отмена контекста — не отказ сервиса: истёкший таймаут это 504,
+// а оборванное клиентом соединение вообще не повод отвечать ошибкой.
+func TestTimeoutReturns504(t *testing.T) {
+	repo := &repoStub{err: context.DeadlineExceeded}
+
+	resp := do(t, newRouter(repo, pingerStub{}), http.MethodGet, "/api/v1/subscriptions/"+uuid.Nil.String(), "")
+
+	if resp.Code != http.StatusGatewayTimeout {
+		t.Fatalf("код ответа = %d, ожидался 504; тело: %s", resp.Code, resp.Body.String())
+	}
+
+	var payload rest.ErrorResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("ответ не разобрался как JSON: %v", err)
+	}
+
+	if payload.Code != "timeout" {
+		t.Errorf("code = %q, ожидался timeout", payload.Code)
+	}
+}
+
+func TestDeleteAndUpdate(t *testing.T) {
+	tests := []struct {
+		name       string
+		notFound   bool
+		method     string
+		body       string
+		wantStatus int
+	}{
+		{name: "удаление существующей", method: http.MethodDelete, wantStatus: http.StatusNoContent},
+		{name: "удаление несуществующей", notFound: true, method: http.MethodDelete, wantStatus: http.StatusNotFound},
+		{name: "обновление существующей", method: http.MethodPut, body: body("price", `500`), wantStatus: http.StatusOK},
+		{name: "обновление несуществующей", notFound: true, method: http.MethodPut, body: body("price", `500`), wantStatus: http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := newRouter(&repoStub{notFound: tt.notFound}, pingerStub{})
+			resp := do(t, router, tt.method, "/api/v1/subscriptions/"+uuid.Nil.String(), tt.body)
+
+			if resp.Code != tt.wantStatus {
+				t.Fatalf("код ответа = %d, ожидался %d; тело: %s", resp.Code, tt.wantStatus, resp.Body.String())
+			}
+
+			if tt.wantStatus == http.StatusNoContent && resp.Body.Len() != 0 {
+				t.Errorf("204 должен быть без тела, получено: %s", resp.Body.String())
+			}
+		})
+	}
+}
+
 // Паника не должна нарушать контракт: клиент, разбирающий code и message,
 // не может ломаться именно в аварийном сценарии.
 func TestPanicReturnsSameErrorFormat(t *testing.T) {
@@ -318,6 +458,28 @@ func TestPanicReturnsSameErrorFormat(t *testing.T) {
 
 	if strings.Contains(payload.Message, "сбой в хранилище") {
 		t.Error("детали паники утекли клиенту")
+	}
+}
+
+// Упавший запрос обязан попасть в лог доступа: иначе паники невидимы в
+// статистике статусов и латентности — ровно там, где важнее всего. Тест
+// закрепляет порядок middleware: логгер снаружи recoverer.
+func TestPanicIsRecordedInAccessLog(t *testing.T) {
+	var logged bytes.Buffer
+
+	log := slog.New(slog.NewJSONHandler(&logged, nil))
+	router := rest.NewRouter(rest.NewHandler(service.New(&repoStub{panics: true}, log), pingerStub{}, log), log)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions/"+uuid.Nil.String(), nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if !strings.Contains(logged.String(), "запрос обработан") {
+		t.Error("строки лога доступа для упавшего запроса нет")
+	}
+
+	if !strings.Contains(logged.String(), `"status":500`) {
+		t.Errorf("в строке лога доступа не зафиксирован статус 500: %s", logged.String())
 	}
 }
 
