@@ -49,7 +49,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	handler := rest.NewHandler(service.New(postgres.NewSubscriptionRepository(pool), log), log)
+	handler := rest.NewHandler(service.New(postgres.NewSubscriptionRepository(pool), log), pool, log)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,

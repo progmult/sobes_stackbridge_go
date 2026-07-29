@@ -2,6 +2,7 @@
 package rest
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,21 +13,36 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
 	"sobes_stackbridge_go/internal/model"
 	"sobes_stackbridge_go/internal/service"
 )
 
+const (
+	// maxRequestBodySize ограничивает тело запроса, чтобы клиент не мог
+	// израсходовать память сервиса одним запросом.
+	maxRequestBodySize = 1 << 20 // 1 МБ
+	// healthTimeout ограничивает проверку доступности базы.
+	healthTimeout = 2 * time.Second
+)
+
+// Pinger проверяет доступность базы данных. Ему удовлетворяет *pgxpool.Pool.
+type Pinger interface {
+	Ping(ctx context.Context) error
+}
+
 // Handler обслуживает HTTP-запросы к подпискам.
 type Handler struct {
 	service *service.Service
+	pinger  Pinger
 	log     *slog.Logger
 }
 
 // NewHandler создаёт обработчик подписок.
-func NewHandler(svc *service.Service, log *slog.Logger) *Handler {
-	return &Handler{service: svc, log: log}
+func NewHandler(svc *service.Service, pinger Pinger, log *slog.Logger) *Handler {
+	return &Handler{service: svc, pinger: pinger, log: log}
 }
 
 // Create godoc
@@ -42,30 +58,30 @@ func NewHandler(svc *service.Service, log *slog.Logger) *Handler {
 //	@Failure		500		{object}	ErrorResponse
 //	@Router			/subscriptions [post]
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
-	var req SubscriptionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, fmt.Errorf("%w: тело запроса должно быть корректным JSON-объектом", model.ErrValidation))
+	req, err := decodeRequest(w, r)
+	if err != nil {
+		h.writeError(w, r, err)
 
 		return
 	}
 
 	sub, err := req.toModel(uuid.Nil)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
 
 	created, err := h.service.Create(r.Context(), sub)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
 
 	// Location на 201 — требование REST: клиент узнаёт адрес созданного ресурса.
 	w.Header().Set("Location", "/api/v1/subscriptions/"+created.ID.String())
-	h.writeJSON(w, http.StatusCreated, newSubscriptionResponse(created))
+	h.writeJSON(w, r, http.StatusCreated, newSubscriptionResponse(created))
 }
 
 // GetByID godoc
@@ -80,21 +96,21 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 //	@Failure		500	{object}	ErrorResponse
 //	@Router			/subscriptions/{id} [get]
 func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := subscriptionID(r)
 	if err != nil {
-		h.writeError(w, fmt.Errorf("%w: идентификатор подписки должен быть корректным UUID", model.ErrValidation))
+		h.writeError(w, r, err)
 
 		return
 	}
 
 	sub, err := h.service.GetByID(r.Context(), id)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
 
-	h.writeJSON(w, http.StatusOK, newSubscriptionResponse(sub))
+	h.writeJSON(w, r, http.StatusOK, newSubscriptionResponse(sub))
 }
 
 // Update godoc
@@ -111,35 +127,35 @@ func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 //	@Failure		500		{object}	ErrorResponse
 //	@Router			/subscriptions/{id} [put]
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := subscriptionID(r)
 	if err != nil {
-		h.writeError(w, fmt.Errorf("%w: идентификатор подписки должен быть корректным UUID", model.ErrValidation))
+		h.writeError(w, r, err)
 
 		return
 	}
 
-	var req SubscriptionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.writeError(w, fmt.Errorf("%w: тело запроса должно быть корректным JSON-объектом", model.ErrValidation))
+	req, err := decodeRequest(w, r)
+	if err != nil {
+		h.writeError(w, r, err)
 
 		return
 	}
 
 	sub, err := req.toModel(id)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
 
 	updated, err := h.service.Update(r.Context(), sub)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
 
-	h.writeJSON(w, http.StatusOK, newSubscriptionResponse(updated))
+	h.writeJSON(w, r, http.StatusOK, newSubscriptionResponse(updated))
 }
 
 // Delete godoc
@@ -154,15 +170,15 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 //	@Failure		500	{object}	ErrorResponse
 //	@Router			/subscriptions/{id} [delete]
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := subscriptionID(r)
 	if err != nil {
-		h.writeError(w, fmt.Errorf("%w: идентификатор подписки должен быть корректным UUID", model.ErrValidation))
+		h.writeError(w, r, err)
 
 		return
 	}
 
 	if err := h.service.Delete(r.Context(), id); err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
@@ -187,21 +203,21 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	filter, err := parseFilter(r)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
 
 	page, err := parsePage(r)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
 
 	subscriptions, total, err := h.service.List(r.Context(), filter, page)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
@@ -211,7 +227,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		items = append(items, newSubscriptionResponse(&subscriptions[i]))
 	}
 
-	h.writeJSON(w, http.StatusOK, ListResponse{
+	h.writeJSON(w, r, http.StatusOK, ListResponse{
 		Items:  items,
 		Total:  total,
 		Limit:  page.Limit,
@@ -236,48 +252,94 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 	from, err := parseDateParam(r, "from")
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
 
 	to, err := parseDateParam(r, "to")
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
 
 	filter, err := parseFilter(r)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
 
 	total, err := h.service.Summary(r.Context(), from, to, filter)
 	if err != nil {
-		h.writeError(w, err)
+		h.writeError(w, r, err)
 
 		return
 	}
 
-	h.writeJSON(w, http.StatusOK, SummaryResponse{
+	h.writeJSON(w, r, http.StatusOK, SummaryResponse{
 		TotalPrice: total,
 		From:       model.FormatDate(from),
 		To:         model.FormatDate(to),
 	})
 }
 
-// Health godoc
+// Health проверяет, что сервис жив и база отвечает.
 //
-//	@Summary	Проверка доступности сервиса
-//	@Tags		health
-//	@Produce	json
-//	@Success	200	{object}	map[string]string
-//	@Router		/healthz [get]
-func (h *Handler) Health(w http.ResponseWriter, _ *http.Request) {
-	h.writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+// В swagger не выносится намеренно: ручка живёт вне /api/v1, а swagger
+// склеивает пути с basePath и в UI запрашивал бы несуществующий
+// /api/v1/healthz.
+func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), healthTimeout)
+	defer cancel()
+
+	if err := h.pinger.Ping(ctx); err != nil {
+		h.log.Error("база данных недоступна", slog.String("error", err.Error()))
+		h.writeJSON(w, r, http.StatusServiceUnavailable, ErrorResponse{
+			Code:    "unavailable",
+			Message: "база данных недоступна",
+		})
+
+		return
+	}
+
+	h.writeJSON(w, r, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// decodeRequest разбирает тело запроса.
+//
+// Декодер настроен строго: неизвестные поля отвергаются, а не игнорируются
+// молча. Это важно из-за семантики PUT — он перезаписывает запись целиком,
+// поэтому опечатка в имени поля без этой проверки не вернула бы ошибку,
+// а обнулила бы значение.
+func decodeRequest(w http.ResponseWriter, r *http.Request) (SubscriptionRequest, error) {
+	var req SubscriptionRequest
+
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodySize))
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&req); err != nil {
+		return req, fmt.Errorf("%w: тело запроса некорректно (%s)", model.ErrValidation, err)
+	}
+
+	// В теле должен быть ровно один JSON-объект: мусор после закрывающей
+	// скобки иначе прошёл бы незамеченным.
+	if decoder.More() {
+		return req, fmt.Errorf("%w: в теле запроса больше одного JSON-значения", model.ErrValidation)
+	}
+
+	return req, nil
+}
+
+// subscriptionID читает идентификатор подписки из пути.
+func subscriptionID(r *http.Request) (uuid.UUID, error) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("%w: идентификатор подписки должен быть корректным UUID", model.ErrValidation)
+	}
+
+	return id, nil
 }
 
 // parseDateParam читает обязательный параметр с датой в формате MM-YYYY.
@@ -354,38 +416,50 @@ func parseFilter(r *http.Request) (model.Filter, error) {
 }
 
 // writeJSON отправляет ответ в формате JSON.
-func (h *Handler) writeJSON(w http.ResponseWriter, status int, payload any) {
+func (h *Handler) writeJSON(w http.ResponseWriter, r *http.Request, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		h.log.Error("не удалось сериализовать ответ", slog.String("error", err.Error()))
+		h.logger(r).Error("не удалось сериализовать ответ", slog.String("error", err.Error()))
 	}
 }
 
 // writeError переводит ошибку в HTTP-ответ: некорректные данные — 400,
 // отсутствие записи — 404, остальное — 500 без деталей наружу.
-func (h *Handler) writeError(w http.ResponseWriter, err error) {
+func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) {
+	log := h.logger(r)
+
 	switch {
 	case errors.Is(err, model.ErrValidation):
-		h.log.Warn("некорректный запрос", slog.String("error", err.Error()))
-		h.writeJSON(w, http.StatusBadRequest, ErrorResponse{
+		log.Warn("некорректный запрос", slog.String("error", err.Error()))
+		h.writeJSON(w, r, http.StatusBadRequest, ErrorResponse{
 			Code:    "validation_error",
 			Message: err.Error(),
 		})
 
 	case errors.Is(err, model.ErrNotFound):
-		h.writeJSON(w, http.StatusNotFound, ErrorResponse{
+		h.writeJSON(w, r, http.StatusNotFound, ErrorResponse{
 			Code:    "not_found",
 			Message: err.Error(),
 		})
 
 	default:
 		// Наружу отдаём общую формулировку, подробности остаются в логе.
-		h.log.Error("внутренняя ошибка", slog.String("error", err.Error()))
-		h.writeJSON(w, http.StatusInternalServerError, ErrorResponse{
+		log.Error("внутренняя ошибка", slog.String("error", err.Error()))
+		h.writeJSON(w, r, http.StatusInternalServerError, ErrorResponse{
 			Code:    "internal_error",
 			Message: "внутренняя ошибка сервиса",
 		})
 	}
+}
+
+// logger добавляет к логгеру идентификатор запроса, чтобы строку об ошибке
+// можно было сопоставить со строкой доступа при разборе инцидента.
+func (h *Handler) logger(r *http.Request) *slog.Logger {
+	if r == nil {
+		return h.log
+	}
+
+	return h.log.With(slog.String("request_id", middleware.GetReqID(r.Context())))
 }
