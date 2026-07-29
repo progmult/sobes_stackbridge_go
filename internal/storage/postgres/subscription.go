@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"sobes_stackbridge_go/internal/model"
@@ -39,7 +41,7 @@ func (r *SubscriptionRepository) Create(ctx context.Context, sub *model.Subscrip
 
 	created, err := scan(row)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось создать подписку: %w", err)
+		return nil, fmt.Errorf("не удалось создать подписку: %w", classify(err))
 	}
 
 	return created, nil
@@ -55,7 +57,7 @@ func (r *SubscriptionRepository) GetByID(ctx context.Context, id uuid.UUID) (*mo
 			return nil, model.ErrNotFound
 		}
 
-		return nil, fmt.Errorf("не удалось получить подписку: %w", err)
+		return nil, fmt.Errorf("не удалось получить подписку: %w", classify(err))
 	}
 
 	return sub, nil
@@ -77,7 +79,7 @@ func (r *SubscriptionRepository) Update(ctx context.Context, sub *model.Subscrip
 			return nil, model.ErrNotFound
 		}
 
-		return nil, fmt.Errorf("не удалось обновить подписку: %w", err)
+		return nil, fmt.Errorf("не удалось обновить подписку: %w", classify(err))
 	}
 
 	return updated, nil
@@ -89,7 +91,7 @@ func (r *SubscriptionRepository) Delete(ctx context.Context, id uuid.UUID) error
 
 	tag, err := r.pool.Exec(ctx, query, id)
 	if err != nil {
-		return fmt.Errorf("не удалось удалить подписку: %w", err)
+		return fmt.Errorf("не удалось удалить подписку: %w", classify(err))
 	}
 
 	if tag.RowsAffected() == 0 {
@@ -113,7 +115,7 @@ func (r *SubscriptionRepository) List(
 
 	var total int
 	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("не удалось посчитать подписки: %w", err)
+		return nil, 0, fmt.Errorf("не удалось посчитать подписки: %w", classify(err))
 	}
 
 	// id в сортировке делает порядок однозначным: без него записи с одинаковой
@@ -125,7 +127,7 @@ func (r *SubscriptionRepository) List(
 
 	rows, err := r.pool.Query(ctx, listQuery, append(args, page.Limit, page.Offset)...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("не удалось получить список подписок: %w", err)
+		return nil, 0, fmt.Errorf("не удалось получить список подписок: %w", classify(err))
 	}
 	defer rows.Close()
 
@@ -141,7 +143,7 @@ func (r *SubscriptionRepository) List(
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("ошибка при чтении списка подписок: %w", err)
+		return nil, 0, fmt.Errorf("ошибка при чтении списка подписок: %w", classify(err))
 	}
 
 	return subscriptions, total, nil
@@ -191,7 +193,7 @@ func (r *SubscriptionRepository) SumForPeriod(
 
 	err := r.pool.QueryRow(ctx, query, args...).Scan(&total)
 	if err != nil {
-		return 0, fmt.Errorf("не удалось посчитать суммарную стоимость: %w", err)
+		return 0, fmt.Errorf("не удалось посчитать суммарную стоимость: %w", classify(err))
 	}
 
 	return total, nil
@@ -226,6 +228,30 @@ func buildFilter(filter service.Filter, args []any) (string, []any) {
 	}
 
 	return " WHERE " + strings.Join(conditions, " AND "), args
+}
+
+// classify переводит ошибки Postgres, вызванные некорректными данными,
+// в model.ErrValidation. Без этого ошибка клиента (слишком длинная строка,
+// число вне диапазона, нарушенный CHECK) возвращалась бы как 500, хотя
+// сервер отработал верно. Валидация в model покрывает известные случаи,
+// а это — страховка на случай ограничений, добавленных в схему позже.
+func classify(err error) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return err
+	}
+
+	switch pgErr.Code {
+	case pgerrcode.NumericValueOutOfRange,
+		pgerrcode.StringDataRightTruncationDataException,
+		pgerrcode.CheckViolation,
+		pgerrcode.NotNullViolation,
+		pgerrcode.InvalidDatetimeFormat,
+		pgerrcode.InvalidTextRepresentation:
+		return fmt.Errorf("%w: данные нарушают ограничения базы (SQLSTATE %s)", model.ErrValidation, pgErr.Code)
+	}
+
+	return err
 }
 
 // scanner объединяет pgx.Row и pgx.Rows: обе умеют Scan.
