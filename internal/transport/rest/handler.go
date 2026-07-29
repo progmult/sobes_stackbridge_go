@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,6 +35,14 @@ const (
 const (
 	DefaultLimit = 50
 	MaxLimit     = 200
+)
+
+// Ошибки уровня протокола: домена они не касаются, поэтому живут здесь,
+// а не в model.
+var (
+	errPayloadTooLarge      = errors.New("тело запроса превышает допустимый размер")
+	errUnsupportedMediaType = errors.New("тело запроса должно быть в формате JSON")
+	errRequestTimeout       = errors.New("превышено время обработки запроса")
 )
 
 // Pinger проверяет доступность базы данных. Ему удовлетворяет *pgxpool.Pool.
@@ -321,22 +331,91 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 // поэтому опечатка в имени поля без этой проверки не вернула бы ошибку,
 // а обнулила бы значение.
 func decodeRequest(w http.ResponseWriter, r *http.Request) (SubscriptionRequest, error) {
+	if err := checkContentType(r); err != nil {
+		return SubscriptionRequest{}, err
+	}
+
 	var req SubscriptionRequest
 
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodySize))
 	decoder.DisallowUnknownFields()
 
 	if err := decoder.Decode(&req); err != nil {
-		return req, fmt.Errorf("%w: тело запроса некорректно (%s)", model.ErrValidation, err)
+		return SubscriptionRequest{}, decodeError(err)
 	}
 
 	// В теле должен быть ровно один JSON-объект: мусор после закрывающей
 	// скобки иначе прошёл бы незамеченным.
 	if decoder.More() {
-		return req, fmt.Errorf("%w: в теле запроса больше одного JSON-значения", model.ErrValidation)
+		return SubscriptionRequest{}, fmt.Errorf("%w: в теле запроса больше одного JSON-значения", model.ErrValidation)
 	}
 
 	return req, nil
+}
+
+// decodeError переводит ошибку разбора JSON в сообщение для клиента.
+//
+// Текст ошибки стандартной библиотеки наружу не отдаётся: он на английском и
+// содержит имена Go-структур, их полей и внутренних типов. Клиенту сообщается
+// только то, что относится к его собственному запросу.
+func decodeError(err error) error {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return fmt.Errorf("%w: не более %d КБ", errPayloadTooLarge, tooLarge.Limit/1024)
+	}
+
+	// Field — имя поля из запроса клиента, его показать можно.
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return fmt.Errorf("%w: поле %q имеет неверный тип", model.ErrValidation, typeErr.Field)
+	}
+
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return fmt.Errorf("%w: тело запроса не является корректным JSON (позиция %d)",
+			model.ErrValidation, syntaxErr.Offset)
+	}
+
+	if errors.Is(err, io.EOF) {
+		return fmt.Errorf("%w: тело запроса пустое", model.ErrValidation)
+	}
+
+	if field, ok := unknownField(err); ok {
+		return fmt.Errorf("%w: неизвестное поле %q", model.ErrValidation, field)
+	}
+
+	return fmt.Errorf("%w: тело запроса не является корректным JSON", model.ErrValidation)
+}
+
+// unknownField достаёт имя поля из ошибки DisallowUnknownFields. Отдельного
+// типа для неё в стандартной библиотеке нет, есть только текст фиксированного
+// формата; если он изменится, вернётся общая формулировка.
+func unknownField(err error) (string, bool) {
+	const prefix = "json: unknown field "
+
+	message := err.Error()
+	if !strings.HasPrefix(message, prefix) {
+		return "", false
+	}
+
+	return strings.Trim(strings.TrimPrefix(message, prefix), `"`), true
+}
+
+// checkContentType отвергает тело в чужом формате. Отсутствующий заголовок
+// допускается: часть клиентов его не ставит, а тело всё равно разбирается
+// как JSON.
+func checkContentType(r *http.Request) error {
+	value := r.Header.Get("Content-Type")
+	if value == "" {
+		return nil
+	}
+
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil || mediaType != "application/json" {
+		return fmt.Errorf("%w: получено %q", errUnsupportedMediaType, value)
+	}
+
+	return nil
 }
 
 // subscriptionID читает идентификатор подписки из пути.
@@ -438,6 +517,32 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 	log := h.logger(r)
 
 	switch {
+	// Клиент оборвал соединение: отвечать некому, и это не отказ сервиса —
+	// иначе мониторинг по level=ERROR ловил бы каждый отменённый запрос.
+	case errors.Is(err, context.Canceled):
+		log.Info("запрос отменён клиентом")
+
+	case errors.Is(err, context.DeadlineExceeded):
+		log.Warn("превышено время обработки запроса", slog.String("error", err.Error()))
+		h.writeJSON(w, r, http.StatusGatewayTimeout, ErrorResponse{
+			Code:    "timeout",
+			Message: errRequestTimeout.Error(),
+		})
+
+	case errors.Is(err, errPayloadTooLarge):
+		log.Warn("тело запроса слишком большое", slog.String("error", err.Error()))
+		h.writeJSON(w, r, http.StatusRequestEntityTooLarge, ErrorResponse{
+			Code:    "payload_too_large",
+			Message: err.Error(),
+		})
+
+	case errors.Is(err, errUnsupportedMediaType):
+		log.Warn("неподдерживаемый тип содержимого", slog.String("error", err.Error()))
+		h.writeJSON(w, r, http.StatusUnsupportedMediaType, ErrorResponse{
+			Code:    "unsupported_media_type",
+			Message: err.Error(),
+		})
+
 	case errors.Is(err, model.ErrValidation):
 		log.Warn("некорректный запрос", slog.String("error", err.Error()))
 		h.writeJSON(w, r, http.StatusBadRequest, ErrorResponse{
