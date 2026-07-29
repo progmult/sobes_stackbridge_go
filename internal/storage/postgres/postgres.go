@@ -43,7 +43,18 @@ func Migrate(cfg *config.Config, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("не удалось инициализировать миграции: %w", err)
 	}
-	defer migrator.Close()
+	// Close возвращает две ошибки: по источнику миграций и по соединению с БД.
+	// Обе только логируем — на результат самой миграции они уже не влияют.
+	defer func() {
+		sourceErr, dbErr := migrator.Close()
+		if sourceErr != nil {
+			log.Error("не удалось закрыть источник миграций", slog.String("error", sourceErr.Error()))
+		}
+
+		if dbErr != nil {
+			log.Error("не удалось закрыть соединение миграций", slog.String("error", dbErr.Error()))
+		}
+	}()
 
 	if err := migrator.Up(); err != nil {
 		if errors.Is(err, migrate.ErrNoChange) {

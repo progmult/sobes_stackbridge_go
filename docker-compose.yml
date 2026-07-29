@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: subscriptions-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -18,7 +18,7 @@ services:
 
   api:
     build: .
-    container_name: subscriptions-api
+    restart: unless-stopped
     environment:
       HTTP_PORT: ${HTTP_PORT:-8080}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -33,6 +33,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # /healthz проверяет и сам сервис, и доступность базы,
+    # поэтому состояние в docker ps отражает реальную работоспособность.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:${HTTP_PORT:-8080}/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   postgres-data:
