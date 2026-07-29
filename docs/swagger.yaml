@@ -1,0 +1,329 @@
+basePath: /api/v1
+definitions:
+  rest.ErrorResponse:
+    properties:
+      code:
+        description: Код ошибки для обработки на клиенте.
+        example: validation_error
+        type: string
+      message:
+        description: Пояснение для человека на русском, без внутренних деталей реализации.
+        example: 'некорректный запрос: стоимость подписки не может быть отрицательной'
+        type: string
+    type: object
+  rest.ListResponse:
+    properties:
+      items:
+        description: Записи текущей страницы. Пустая страница — это [], а не null.
+        items:
+          $ref: '#/definitions/rest.SubscriptionResponse'
+        type: array
+      limit:
+        description: Размер страницы, применённый сервисом.
+        example: 50
+        type: integer
+      offset:
+        description: Смещение от начала выборки.
+        example: 0
+        type: integer
+      total:
+        description: Сколько всего записей подходит под фильтр, без учёта постраничности.
+        example: 42
+        type: integer
+    type: object
+  rest.SubscriptionRequest:
+    properties:
+      end_date:
+        description: Месяц и год окончания подписки, формат MM-YYYY. Поле необязательное.
+        example: 12-2025
+        type: string
+      price:
+        description: Стоимость месячной подписки в рублях, целое число.
+        example: 400
+        type: integer
+      service_name:
+        description: Название сервиса, предоставляющего подписку.
+        example: Yandex Plus
+        type: string
+      start_date:
+        description: Месяц и год начала подписки, формат MM-YYYY.
+        example: 07-2025
+        type: string
+      user_id:
+        description: ID пользователя в формате UUID.
+        example: 60601fee-2bf1-4721-ae6f-7636e79a0cba
+        type: string
+    type: object
+  rest.SubscriptionResponse:
+    properties:
+      end_date:
+        example: 12-2025
+        type: string
+      id:
+        example: 7c6f1e2a-6b4e-4c67-9f3f-2f2a1d6b8c11
+        type: string
+      price:
+        example: 400
+        type: integer
+      service_name:
+        example: Yandex Plus
+        type: string
+      start_date:
+        example: 07-2025
+        type: string
+      user_id:
+        example: 60601fee-2bf1-4721-ae6f-7636e79a0cba
+        type: string
+    type: object
+  rest.SummaryResponse:
+    properties:
+      from:
+        description: Начало периода включительно, MM-YYYY.
+        example: 01-2025
+        type: string
+      to:
+        description: Конец периода включительно, MM-YYYY.
+        example: 12-2025
+        type: string
+      total_price:
+        description: Суммарная стоимость в рублях за весь период.
+        example: 4800
+        type: integer
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: |-
+    REST-сервис для агрегации данных об онлайн-подписках пользователей.
+    Даты передаются в формате MM-YYYY, стоимость — целое число рублей.
+  title: Subscriptions API
+  version: "1.0"
+paths:
+  /healthz:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Проверка доступности сервиса
+      tags:
+      - health
+  /subscriptions:
+    get:
+      description: Возвращает подписки с необязательной фильтрацией по пользователю
+        и названию сервиса.
+      parameters:
+      - description: Фильтр по ID пользователя
+        format: uuid
+        in: query
+        name: user_id
+        type: string
+      - description: Фильтр по названию сервиса
+        in: query
+        name: service_name
+        type: string
+      - default: 50
+        description: Размер страницы, от 1 до 200
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: Смещение от начала выборки
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rest.ListResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+      summary: Список подписок
+      tags:
+      - subscriptions
+    post:
+      consumes:
+      - application/json
+      description: Создаёт запись о подписке. Даты передаются в формате MM-YYYY.
+      parameters:
+      - description: Данные подписки
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/rest.SubscriptionRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/rest.SubscriptionResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+      summary: Создать подписку
+      tags:
+      - subscriptions
+  /subscriptions/{id}:
+    delete:
+      parameters:
+      - description: ID подписки
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: Подписка удалена
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+      summary: Удалить подписку
+      tags:
+      - subscriptions
+    get:
+      parameters:
+      - description: ID подписки
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rest.SubscriptionResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+      summary: Получить подписку
+      tags:
+      - subscriptions
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID подписки
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Новые данные подписки
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/rest.SubscriptionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rest.SubscriptionResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+      summary: Обновить подписку
+      tags:
+      - subscriptions
+  /subscriptions/summary:
+    get:
+      description: Считает суммарную стоимость подписок за период [from, to] включительно.
+        Учитываются только месяцы, попадающие в период; подписка без даты окончания
+        считается активной до конца периода.
+      parameters:
+      - description: Начало периода, MM-YYYY
+        example: 01-2025
+        in: query
+        name: from
+        required: true
+        type: string
+      - description: Конец периода, MM-YYYY
+        example: 12-2025
+        in: query
+        name: to
+        required: true
+        type: string
+      - description: Фильтр по ID пользователя
+        format: uuid
+        in: query
+        name: user_id
+        type: string
+      - description: Фильтр по названию сервиса
+        in: query
+        name: service_name
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/rest.SummaryResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+      summary: Суммарная стоимость подписок
+      tags:
+      - subscriptions
+swagger: "2.0"
