@@ -72,7 +72,10 @@ func NewHandler(svc *service.Service, pinger Pinger, log *slog.Logger) *Handler 
 //	@Param			request	body		SubscriptionRequest	true	"Данные подписки"
 //	@Success		201		{object}	SubscriptionResponse
 //	@Failure		400		{object}	ErrorResponse
+//	@Failure		413		{object}	ErrorResponse
+//	@Failure		415		{object}	ErrorResponse
 //	@Failure		500		{object}	ErrorResponse
+//	@Failure		504		{object}	ErrorResponse
 //	@Router			/subscriptions [post]
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	req, err := decodeRequest(w, r)
@@ -111,6 +114,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 //	@Failure		400	{object}	ErrorResponse
 //	@Failure		404	{object}	ErrorResponse
 //	@Failure		500	{object}	ErrorResponse
+//	@Failure		504	{object}	ErrorResponse
 //	@Router			/subscriptions/{id} [get]
 func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 	id, err := subscriptionID(r)
@@ -141,7 +145,10 @@ func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 //	@Success		200		{object}	SubscriptionResponse
 //	@Failure		400		{object}	ErrorResponse
 //	@Failure		404		{object}	ErrorResponse
+//	@Failure		413		{object}	ErrorResponse
+//	@Failure		415		{object}	ErrorResponse
 //	@Failure		500		{object}	ErrorResponse
+//	@Failure		504		{object}	ErrorResponse
 //	@Router			/subscriptions/{id} [put]
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := subscriptionID(r)
@@ -185,6 +192,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 //	@Failure		400	{object}	ErrorResponse
 //	@Failure		404	{object}	ErrorResponse
 //	@Failure		500	{object}	ErrorResponse
+//	@Failure		504	{object}	ErrorResponse
 //	@Router			/subscriptions/{id} [delete]
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := subscriptionID(r)
@@ -216,6 +224,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 //	@Success		200				{object}	ListResponse
 //	@Failure		400				{object}	ErrorResponse
 //	@Failure		500				{object}	ErrorResponse
+//	@Failure		504				{object}	ErrorResponse
 //	@Router			/subscriptions [get]
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	filter, err := parseFilter(r)
@@ -265,6 +274,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 //	@Success		200				{object}	SummaryResponse
 //	@Failure		400				{object}	ErrorResponse
 //	@Failure		500				{object}	ErrorResponse
+//	@Failure		504				{object}	ErrorResponse
 //	@Router			/subscriptions/summary [get]
 func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 	from, err := parseDateParam(r, "from")
