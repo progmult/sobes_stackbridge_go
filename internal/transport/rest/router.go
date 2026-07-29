@@ -21,9 +21,12 @@ const requestTimeout = 10 * time.Second
 func NewRouter(h *Handler, log *slog.Logger) http.Handler {
 	router := chi.NewRouter()
 
+	// Порядок важен: requestLogger снаружи recoverer. Иначе паника
+	// разворачивает стек мимо логгера, строка доступа не пишется вовсе,
+	// и упавшие запросы не видны ни в статистике статусов, ни в латентности.
 	router.Use(middleware.RequestID)
-	router.Use(h.recoverer)
 	router.Use(requestLogger(log))
+	router.Use(h.recoverer)
 	router.Use(middleware.Timeout(requestTimeout))
 
 	// Чтобы ошибки маршрутизации тоже приходили в JSON, а не текстом.
