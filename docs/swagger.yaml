@@ -99,20 +99,6 @@ info:
   title: Subscriptions API
   version: "1.0"
 paths:
-  /healthz:
-    get:
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Проверка доступности сервиса
-      tags:
-      - health
   /subscriptions:
     get:
       description: Возвращает подписки с необязательной фильтрацией по пользователю

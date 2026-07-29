@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,6 +18,16 @@ import (
 	"sobes_stackbridge_go/internal/transport/rest"
 )
 
+// Таймауты HTTP-сервера: без них медленный клиент может держать соединение
+// сколько угодно.
+const (
+	readTimeout       = 15 * time.Second
+	readHeaderTimeout = 10 * time.Second
+	writeTimeout      = 15 * time.Second
+	idleTimeout       = 60 * time.Second
+	shutdownTimeout   = 10 * time.Second
+)
+
 //	@title			Subscriptions API
 //	@version		1.0
 //	@description	REST-сервис для агрегации данных об онлайн-подписках пользователей.
@@ -26,17 +37,26 @@ import (
 //	@BasePath	/api/v1
 
 func main() {
+	// Вся работа вынесена в run: только так ошибка старта доходит до
+	// os.Exit(1). Если завершаться из main обычным возвратом, процесс отдаёт
+	// код 0, и docker с kubernetes считают падение штатным завершением.
+	if err := run(); err != nil {
+		slog.Error("сервис остановлен с ошибкой", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		slog.Error("не удалось загрузить конфигурацию", slog.String("error", err.Error()))
-		os.Exit(1)
+		return fmt.Errorf("не удалось загрузить конфигурацию: %w", err)
 	}
 
 	log := newLogger(cfg.LogLevel)
+	slog.SetDefault(log)
 
 	if err := postgres.Migrate(cfg, log); err != nil {
-		log.Error("не удалось применить миграции", slog.String("error", err.Error()))
-		os.Exit(1)
+		return fmt.Errorf("не удалось применить миграции: %w", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -44,39 +64,50 @@ func main() {
 
 	pool, err := postgres.NewPool(ctx, cfg)
 	if err != nil {
-		log.Error("не удалось подключиться к базе данных", slog.String("error", err.Error()))
-		os.Exit(1)
+		return fmt.Errorf("не удалось подключиться к базе данных: %w", err)
 	}
 	defer pool.Close()
 
-	handler := rest.NewHandler(service.New(postgres.NewSubscriptionRepository(pool), log), log)
+	subscriptions := service.New(postgres.NewSubscriptionRepository(pool), log)
+	handler := rest.NewHandler(subscriptions, pool, log)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
 		Handler:           rest.NewRouter(handler, log),
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       readTimeout,
+		ReadHeaderTimeout: readHeaderTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
 	}
+
+	serverErrors := make(chan error, 1)
 
 	go func() {
 		log.Info("http-сервер запущен", slog.String("addr", server.Addr))
 
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("ошибка http-сервера", slog.String("error", err.Error()))
-			stop()
+			serverErrors <- err
 		}
 	}()
 
-	<-ctx.Done()
-	log.Info("получен сигнал остановки")
+	select {
+	case err := <-serverErrors:
+		return fmt.Errorf("http-сервер не смог принимать соединения: %w", err)
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	case <-ctx.Done():
+		log.Info("получен сигнал остановки")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Error("ошибка при штатной остановке сервера", slog.String("error", err.Error()))
+		return fmt.Errorf("не удалось штатно остановить сервер: %w", err)
 	}
 
 	log.Info("сервис остановлен")
+
+	return nil
 }
 
 // newLogger настраивает структурированный логгер.

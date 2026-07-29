@@ -9,11 +9,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"sobes_stackbridge_go/internal/model"
-	"sobes_stackbridge_go/internal/service"
 )
 
 const columns = `id, service_name, price, user_id, start_date, end_date`
@@ -39,7 +40,7 @@ func (r *SubscriptionRepository) Create(ctx context.Context, sub *model.Subscrip
 
 	created, err := scan(row)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось создать подписку: %w", err)
+		return nil, fmt.Errorf("не удалось создать подписку: %w", classify(err))
 	}
 
 	return created, nil
@@ -55,7 +56,7 @@ func (r *SubscriptionRepository) GetByID(ctx context.Context, id uuid.UUID) (*mo
 			return nil, model.ErrNotFound
 		}
 
-		return nil, fmt.Errorf("не удалось получить подписку: %w", err)
+		return nil, fmt.Errorf("не удалось получить подписку: %w", classify(err))
 	}
 
 	return sub, nil
@@ -77,7 +78,7 @@ func (r *SubscriptionRepository) Update(ctx context.Context, sub *model.Subscrip
 			return nil, model.ErrNotFound
 		}
 
-		return nil, fmt.Errorf("не удалось обновить подписку: %w", err)
+		return nil, fmt.Errorf("не удалось обновить подписку: %w", classify(err))
 	}
 
 	return updated, nil
@@ -89,7 +90,7 @@ func (r *SubscriptionRepository) Delete(ctx context.Context, id uuid.UUID) error
 
 	tag, err := r.pool.Exec(ctx, query, id)
 	if err != nil {
-		return fmt.Errorf("не удалось удалить подписку: %w", err)
+		return fmt.Errorf("не удалось удалить подписку: %w", classify(err))
 	}
 
 	if tag.RowsAffected() == 0 {
@@ -104,16 +105,15 @@ func (r *SubscriptionRepository) Delete(ctx context.Context, id uuid.UUID) error
 // фильтр — оно нужно клиенту, чтобы понимать, сколько ещё страниц впереди.
 func (r *SubscriptionRepository) List(
 	ctx context.Context,
-	filter service.Filter,
-	page service.Page,
+	filter model.Filter,
+	page model.Page,
 ) ([]model.Subscription, int, error) {
-	where, args := buildFilter(filter, nil)
-
-	countQuery := `SELECT count(*) FROM subscriptions` + where
+	conditions, args := filterConditions(filter, nil)
+	where := whereClause(conditions)
 
 	var total int
-	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("не удалось посчитать подписки: %w", err)
+	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM subscriptions`+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("не удалось посчитать подписки: %w", classify(err))
 	}
 
 	// id в сортировке делает порядок однозначным: без него записи с одинаковой
@@ -125,7 +125,7 @@ func (r *SubscriptionRepository) List(
 
 	rows, err := r.pool.Query(ctx, listQuery, append(args, page.Limit, page.Offset)...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("не удалось получить список подписок: %w", err)
+		return nil, 0, fmt.Errorf("не удалось получить список подписок: %w", classify(err))
 	}
 	defer rows.Close()
 
@@ -141,7 +141,7 @@ func (r *SubscriptionRepository) List(
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("ошибка при чтении списка подписок: %w", err)
+		return nil, 0, fmt.Errorf("ошибка при чтении списка подписок: %w", classify(err))
 	}
 
 	return subscriptions, total, nil
@@ -155,9 +155,9 @@ func (r *SubscriptionRepository) List(
 func (r *SubscriptionRepository) SumForPeriod(
 	ctx context.Context,
 	from, to time.Time,
-	filter service.Filter,
+	filter model.Filter,
 ) (int64, error) {
-	// Условия периода занимают $1 и $2, фильтры продолжают нумерацию с $3.
+	// Период занимает $1 и $2, фильтры продолжают нумерацию с $3.
 	// Здесь IS NULL — не «фильтр не задан», а настоящее бизнес-условие:
 	// подписка без даты окончания действует до конца периода.
 	conditions := []string{
@@ -165,10 +165,8 @@ func (r *SubscriptionRepository) SumForPeriod(
 		"(end_date IS NULL OR end_date >= $1::date)",
 	}
 
-	where, args := buildFilter(filter, []any{from, to})
-	if where != "" {
-		conditions = append(conditions, strings.TrimPrefix(where, " WHERE "))
-	}
+	filterConds, args := filterConditions(filter, []any{from, to})
+	conditions = append(conditions, filterConds...)
 
 	query := fmt.Sprintf(`
 		WITH overlapping AS (
@@ -189,16 +187,15 @@ func (r *SubscriptionRepository) SumForPeriod(
 
 	var total int64
 
-	err := r.pool.QueryRow(ctx, query, args...).Scan(&total)
-	if err != nil {
-		return 0, fmt.Errorf("не удалось посчитать суммарную стоимость: %w", err)
+	if err := r.pool.QueryRow(ctx, query, args...).Scan(&total); err != nil {
+		return 0, fmt.Errorf("не удалось посчитать суммарную стоимость: %w", classify(err))
 	}
 
 	return total, nil
 }
 
-// buildFilter собирает условие WHERE только из тех фильтров, которые заданы,
-// и дописывает их значения к args, продолжая нумерацию плейсхолдеров.
+// filterConditions возвращает условия только для заданных фильтров и
+// дописывает их значения к args, продолжая нумерацию плейсхолдеров.
 //
 // Условие для незаданного фильтра не добавляется вовсе — и это принципиально.
 // Универсальный вариант «$1 IS NULL OR user_id = $1» позволил бы обойтись
@@ -208,7 +205,7 @@ func (r *SubscriptionRepository) SumForPeriod(
 //
 // В SQL подставляются только номера плейсхолдеров, значения всегда уходят
 // параметрами — на инъекции это не влияет.
-func buildFilter(filter service.Filter, args []any) (string, []any) {
+func filterConditions(filter model.Filter, args []any) ([]string, []any) {
 	var conditions []string
 
 	if filter.UserID != nil {
@@ -221,11 +218,40 @@ func buildFilter(filter service.Filter, args []any) (string, []any) {
 		conditions = append(conditions, fmt.Sprintf("lower(service_name) = lower($%d::text)", len(args)))
 	}
 
+	return conditions, args
+}
+
+// whereClause склеивает условия в готовый фрагмент запроса.
+func whereClause(conditions []string) string {
 	if len(conditions) == 0 {
-		return "", args
+		return ""
 	}
 
-	return " WHERE " + strings.Join(conditions, " AND "), args
+	return " WHERE " + strings.Join(conditions, " AND ")
+}
+
+// classify переводит ошибки Postgres, вызванные некорректными данными,
+// в model.ErrValidation. Без этого ошибка клиента (слишком длинная строка,
+// число вне диапазона, нарушенный CHECK) возвращалась бы как 500, хотя
+// сервер отработал верно. Валидация в model покрывает известные случаи,
+// а это — страховка на случай ограничений, добавленных в схему позже.
+func classify(err error) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return err
+	}
+
+	switch pgErr.Code {
+	case pgerrcode.NumericValueOutOfRange,
+		pgerrcode.StringDataRightTruncationDataException,
+		pgerrcode.CheckViolation,
+		pgerrcode.NotNullViolation,
+		pgerrcode.InvalidDatetimeFormat,
+		pgerrcode.InvalidTextRepresentation:
+		return fmt.Errorf("%w: данные нарушают ограничения базы (SQLSTATE %s)", model.ErrValidation, pgErr.Code)
+	}
+
+	return err
 }
 
 // scanner объединяет pgx.Row и pgx.Rows: обе умеют Scan.

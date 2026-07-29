@@ -4,13 +4,31 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
 
 // DateLayout — формат даты в API: месяц и год, например "07-2025".
 const DateLayout = "01-2006"
+
+// Границы значений повторяют ограничения колонок в схеме БД. Без них
+// некорректный ввод доходил бы до Postgres и возвращался клиенту как 500,
+// хотя это ошибка запроса.
+const (
+	// MaxServiceNameLength соответствует VARCHAR(255).
+	MaxServiceNameLength = 255
+	// MaxPrice соответствует INTEGER: Go int шире, чем колонка в БД.
+	MaxPrice = math.MaxInt32
+)
+
+// Ограничения размера страницы списка подписок.
+const (
+	DefaultLimit = 50
+	MaxLimit     = 200
+)
 
 var (
 	// ErrNotFound — записи о подписке нет в базе.
@@ -28,6 +46,19 @@ type Subscription struct {
 	UserID      uuid.UUID
 	StartDate   time.Time
 	EndDate     *time.Time
+}
+
+// Filter — необязательные фильтры выборки. nil означает «не фильтровать».
+type Filter struct {
+	UserID      *uuid.UUID
+	ServiceName *string
+}
+
+// Page — постраничная навигация. Значения приходят уже проверенными
+// из транспортного слоя.
+type Page struct {
+	Limit  int
+	Offset int
 }
 
 // ParseDate разбирает дату вида "07-2025" в первое число месяца.
@@ -50,8 +81,12 @@ func (s *Subscription) Validate() error {
 	switch {
 	case s.ServiceName == "":
 		return fmt.Errorf("%w: название сервиса не может быть пустым", ErrValidation)
+	case utf8.RuneCountInString(s.ServiceName) > MaxServiceNameLength:
+		return fmt.Errorf("%w: название сервиса длиннее %d символов", ErrValidation, MaxServiceNameLength)
 	case s.Price < 0:
 		return fmt.Errorf("%w: стоимость подписки не может быть отрицательной", ErrValidation)
+	case s.Price > MaxPrice:
+		return fmt.Errorf("%w: стоимость подписки не может превышать %d", ErrValidation, MaxPrice)
 	case s.UserID == uuid.Nil:
 		return fmt.Errorf("%w: не указан идентификатор пользователя", ErrValidation)
 	case s.StartDate.IsZero():
