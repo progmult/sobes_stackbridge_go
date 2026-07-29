@@ -17,7 +17,7 @@ import (
 // repoStub — заглушка хранилища: запоминает то, что ей передали.
 type repoStub struct {
 	created *model.Subscription
-	page    service.Page
+	page    model.Page
 	from    time.Time
 	to      time.Time
 	sum     int64
@@ -42,13 +42,13 @@ func (r *repoStub) Delete(context.Context, uuid.UUID) error {
 	return nil
 }
 
-func (r *repoStub) List(_ context.Context, _ service.Filter, page service.Page) ([]model.Subscription, int, error) {
+func (r *repoStub) List(_ context.Context, _ model.Filter, page model.Page) ([]model.Subscription, int, error) {
 	r.page = page
 
 	return nil, 0, nil
 }
 
-func (r *repoStub) SumForPeriod(_ context.Context, from, to time.Time, _ service.Filter) (int64, error) {
+func (r *repoStub) SumForPeriod(_ context.Context, from, to time.Time, _ model.Filter) (int64, error) {
 	r.from, r.to = from, to
 
 	return r.sum, nil
@@ -96,7 +96,7 @@ func TestSummaryRejectsInvertedPeriod(t *testing.T) {
 	from := time.Date(2025, time.December, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
 
-	_, err := newService(&repoStub{}).Summary(context.Background(), from, to, service.Filter{})
+	_, err := newService(&repoStub{}).Summary(context.Background(), from, to, model.Filter{})
 
 	if !errors.Is(err, model.ErrValidation) {
 		t.Fatalf("Summary() error = %v, want ErrValidation", err)
@@ -109,7 +109,7 @@ func TestSummaryReturnsRepositoryTotal(t *testing.T) {
 
 	repo := &repoStub{sum: 4800}
 
-	total, err := newService(repo).Summary(context.Background(), from, to, service.Filter{})
+	total, err := newService(repo).Summary(context.Background(), from, to, model.Filter{})
 	if err != nil {
 		t.Fatalf("Summary() returned unexpected error: %v", err)
 	}

@@ -13,33 +13,14 @@ import (
 	"sobes_stackbridge_go/internal/model"
 )
 
-// Ограничения размера страницы списка подписок.
-const (
-	DefaultLimit = 50
-	MaxLimit     = 200
-)
-
-// Filter — необязательные фильтры выборки. nil означает «не фильтровать».
-type Filter struct {
-	UserID      *uuid.UUID
-	ServiceName *string
-}
-
-// Page — постраничная навигация. Значения приходят уже проверенными
-// из транспортного слоя.
-type Page struct {
-	Limit  int
-	Offset int
-}
-
 // Repository — контракт хранилища подписок.
 type Repository interface {
 	Create(ctx context.Context, sub *model.Subscription) (*model.Subscription, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Subscription, error)
 	Update(ctx context.Context, sub *model.Subscription) (*model.Subscription, error)
 	Delete(ctx context.Context, id uuid.UUID) error
-	List(ctx context.Context, filter Filter, page Page) ([]model.Subscription, int, error)
-	SumForPeriod(ctx context.Context, from, to time.Time, filter Filter) (int64, error)
+	List(ctx context.Context, filter model.Filter, page model.Page) ([]model.Subscription, int, error)
+	SumForPeriod(ctx context.Context, from, to time.Time, filter model.Filter) (int64, error)
 }
 
 // Service реализует сценарии работы с подписками.
@@ -110,14 +91,13 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// List возвращает страницу подписок с учётом фильтров и общее количество
-// записей, подходящих под фильтр.
-func (s *Service) List(ctx context.Context, filter Filter, page Page) ([]model.Subscription, int, error) {
+// List возвращает страницу подписок и общее количество записей под фильтр.
+func (s *Service) List(ctx context.Context, filter model.Filter, page model.Page) ([]model.Subscription, int, error) {
 	return s.repo.List(ctx, filter, page)
 }
 
 // Summary считает суммарную стоимость подписок за период [from, to] включительно.
-func (s *Service) Summary(ctx context.Context, from, to time.Time, filter Filter) (int64, error) {
+func (s *Service) Summary(ctx context.Context, from, to time.Time, filter model.Filter) (int64, error) {
 	if to.Before(from) {
 		return 0, fmt.Errorf("%w: конец периода не может быть раньше его начала", model.ErrValidation)
 	}

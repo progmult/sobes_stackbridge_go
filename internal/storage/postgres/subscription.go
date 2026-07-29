@@ -15,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"sobes_stackbridge_go/internal/model"
-	"sobes_stackbridge_go/internal/service"
 )
 
 const columns = `id, service_name, price, user_id, start_date, end_date`
@@ -106,15 +105,14 @@ func (r *SubscriptionRepository) Delete(ctx context.Context, id uuid.UUID) error
 // фильтр — оно нужно клиенту, чтобы понимать, сколько ещё страниц впереди.
 func (r *SubscriptionRepository) List(
 	ctx context.Context,
-	filter service.Filter,
-	page service.Page,
+	filter model.Filter,
+	page model.Page,
 ) ([]model.Subscription, int, error) {
-	where, args := buildFilter(filter, nil)
-
-	countQuery := `SELECT count(*) FROM subscriptions` + where
+	conditions, args := filterConditions(filter, nil)
+	where := whereClause(conditions)
 
 	var total int
-	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM subscriptions`+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("не удалось посчитать подписки: %w", classify(err))
 	}
 
@@ -157,9 +155,9 @@ func (r *SubscriptionRepository) List(
 func (r *SubscriptionRepository) SumForPeriod(
 	ctx context.Context,
 	from, to time.Time,
-	filter service.Filter,
+	filter model.Filter,
 ) (int64, error) {
-	// Условия периода занимают $1 и $2, фильтры продолжают нумерацию с $3.
+	// Период занимает $1 и $2, фильтры продолжают нумерацию с $3.
 	// Здесь IS NULL — не «фильтр не задан», а настоящее бизнес-условие:
 	// подписка без даты окончания действует до конца периода.
 	conditions := []string{
@@ -167,10 +165,8 @@ func (r *SubscriptionRepository) SumForPeriod(
 		"(end_date IS NULL OR end_date >= $1::date)",
 	}
 
-	where, args := buildFilter(filter, []any{from, to})
-	if where != "" {
-		conditions = append(conditions, strings.TrimPrefix(where, " WHERE "))
-	}
+	filterConds, args := filterConditions(filter, []any{from, to})
+	conditions = append(conditions, filterConds...)
 
 	query := fmt.Sprintf(`
 		WITH overlapping AS (
@@ -191,16 +187,15 @@ func (r *SubscriptionRepository) SumForPeriod(
 
 	var total int64
 
-	err := r.pool.QueryRow(ctx, query, args...).Scan(&total)
-	if err != nil {
+	if err := r.pool.QueryRow(ctx, query, args...).Scan(&total); err != nil {
 		return 0, fmt.Errorf("не удалось посчитать суммарную стоимость: %w", classify(err))
 	}
 
 	return total, nil
 }
 
-// buildFilter собирает условие WHERE только из тех фильтров, которые заданы,
-// и дописывает их значения к args, продолжая нумерацию плейсхолдеров.
+// filterConditions возвращает условия только для заданных фильтров и
+// дописывает их значения к args, продолжая нумерацию плейсхолдеров.
 //
 // Условие для незаданного фильтра не добавляется вовсе — и это принципиально.
 // Универсальный вариант «$1 IS NULL OR user_id = $1» позволил бы обойтись
@@ -210,7 +205,7 @@ func (r *SubscriptionRepository) SumForPeriod(
 //
 // В SQL подставляются только номера плейсхолдеров, значения всегда уходят
 // параметрами — на инъекции это не влияет.
-func buildFilter(filter service.Filter, args []any) (string, []any) {
+func filterConditions(filter model.Filter, args []any) ([]string, []any) {
 	var conditions []string
 
 	if filter.UserID != nil {
@@ -223,11 +218,16 @@ func buildFilter(filter service.Filter, args []any) (string, []any) {
 		conditions = append(conditions, fmt.Sprintf("lower(service_name) = lower($%d::text)", len(args)))
 	}
 
+	return conditions, args
+}
+
+// whereClause склеивает условия в готовый фрагмент запроса.
+func whereClause(conditions []string) string {
 	if len(conditions) == 0 {
-		return "", args
+		return ""
 	}
 
-	return " WHERE " + strings.Join(conditions, " AND "), args
+	return " WHERE " + strings.Join(conditions, " AND ")
 }
 
 // classify переводит ошибки Postgres, вызванные некорректными данными,

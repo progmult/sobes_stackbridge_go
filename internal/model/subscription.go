@@ -24,6 +24,12 @@ const (
 	MaxPrice = math.MaxInt32
 )
 
+// Ограничения размера страницы списка подписок.
+const (
+	DefaultLimit = 50
+	MaxLimit     = 200
+)
+
 var (
 	// ErrNotFound — записи о подписке нет в базе.
 	ErrNotFound = errors.New("подписка не найдена")
@@ -40,6 +46,19 @@ type Subscription struct {
 	UserID      uuid.UUID
 	StartDate   time.Time
 	EndDate     *time.Time
+}
+
+// Filter — необязательные фильтры выборки. nil означает «не фильтровать».
+type Filter struct {
+	UserID      *uuid.UUID
+	ServiceName *string
+}
+
+// Page — постраничная навигация. Значения приходят уже проверенными
+// из транспортного слоя.
+type Page struct {
+	Limit  int
+	Offset int
 }
 
 // ParseDate разбирает дату вида "07-2025" в первое число месяца.

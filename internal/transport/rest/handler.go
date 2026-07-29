@@ -292,30 +292,30 @@ func parseDateParam(r *http.Request, name string) (time.Time, error) {
 
 // parsePage читает limit и offset, подставляя значения по умолчанию.
 // Слишком большой limit не считается ошибкой, а урезается до максимума.
-func parsePage(r *http.Request) (service.Page, error) {
-	limit, err := intParam(r, "limit", service.DefaultLimit)
+func parsePage(r *http.Request) (model.Page, error) {
+	limit, err := intParam(r, "limit", model.DefaultLimit)
 	if err != nil {
-		return service.Page{}, err
+		return model.Page{}, err
 	}
 
 	if limit < 1 {
-		return service.Page{}, fmt.Errorf("%w: параметр limit должен быть больше нуля", model.ErrValidation)
+		return model.Page{}, fmt.Errorf("%w: параметр limit должен быть больше нуля", model.ErrValidation)
 	}
 
-	if limit > service.MaxLimit {
-		limit = service.MaxLimit
+	if limit > model.MaxLimit {
+		limit = model.MaxLimit
 	}
 
 	offset, err := intParam(r, "offset", 0)
 	if err != nil {
-		return service.Page{}, err
+		return model.Page{}, err
 	}
 
 	if offset < 0 {
-		return service.Page{}, fmt.Errorf("%w: параметр offset не может быть отрицательным", model.ErrValidation)
+		return model.Page{}, fmt.Errorf("%w: параметр offset не может быть отрицательным", model.ErrValidation)
 	}
 
-	return service.Page{Limit: limit, Offset: offset}, nil
+	return model.Page{Limit: limit, Offset: offset}, nil
 }
 
 // intParam читает целочисленный query-параметр или возвращает значение по умолчанию.
@@ -334,8 +334,8 @@ func intParam(r *http.Request, name string, fallback int) (int, error) {
 }
 
 // parseFilter собирает необязательные фильтры из query-параметров.
-func parseFilter(r *http.Request) (service.Filter, error) {
-	var filter service.Filter
+func parseFilter(r *http.Request) (model.Filter, error) {
+	var filter model.Filter
 
 	if value := strings.TrimSpace(r.URL.Query().Get("user_id")); value != "" {
 		userID, err := uuid.Parse(value)
