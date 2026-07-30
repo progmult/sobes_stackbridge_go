@@ -1,6 +1,8 @@
 package rest
 
 import (
+	"cmp"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -24,6 +26,7 @@ type SubscriptionRequest struct {
 
 // fieldOrder задаёт порядок полей в перечне нарушений — тот же, что в теле
 // запроса. Без него порядок зависел бы от того, на каком этапе поле споткнулось.
+// Поля, не попавшие в список, не теряются, а уходят в конец перечня.
 var fieldOrder = []string{
 	model.FieldServiceName,
 	model.FieldPrice,
@@ -96,25 +99,38 @@ func (r SubscriptionRequest) toModel(id uuid.UUID) (*model.Subscription, error) 
 // значение и скажет «не указано», хотя точная причина — формат. Побеждает
 // сообщение о разборе.
 func mergeViolations(groups ...[]model.Violation) []model.Violation {
-	byField := make(map[string]model.Violation, len(fieldOrder))
+	reported := make(map[string]bool, len(fieldOrder))
+	merged := make([]model.Violation, 0, len(fieldOrder))
 
 	for _, group := range groups {
 		for _, violation := range group {
-			if _, reported := byField[violation.Field]; !reported {
-				byField[violation.Field] = violation
+			if reported[violation.Field] {
+				continue
 			}
-		}
-	}
 
-	merged := make([]model.Violation, 0, len(byField))
+			reported[violation.Field] = true
 
-	for _, field := range fieldOrder {
-		if violation, ok := byField[field]; ok {
 			merged = append(merged, violation)
 		}
 	}
 
+	slices.SortStableFunc(merged, func(a, b model.Violation) int {
+		return cmp.Compare(fieldRank(a.Field), fieldRank(b.Field))
+	})
+
 	return merged
+}
+
+// fieldRank — позиция поля в fieldOrder. Поле, которого там нет, уходит в конец,
+// а не выбрасывается: fieldOrder задаёт порядок, но не решает, о чём сообщать.
+// Иначе забытая в нём строка молча выключила бы проверку нового поля — и запрос
+// с единственным таким нарушением был бы принят как корректный.
+func fieldRank(field string) int {
+	if rank := slices.Index(fieldOrder, field); rank >= 0 {
+		return rank
+	}
+
+	return len(fieldOrder)
 }
 
 // SubscriptionResponse — представление подписки в ответах API.
