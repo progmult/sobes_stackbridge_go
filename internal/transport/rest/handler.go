@@ -71,6 +71,7 @@ func NewHandler(svc *service.Service, pinger Pinger, log *slog.Logger) *Handler 
 //	@Param			request	body		SubscriptionRequest	true	"Данные подписки"
 //	@Success		201		{object}	SubscriptionResponse
 //	@Failure		400		{object}	ErrorResponse
+//	@Failure		409		{object}	ErrorResponse
 //	@Failure		413		{object}	ErrorResponse
 //	@Failure		415		{object}	ErrorResponse
 //	@Failure		500		{object}	ErrorResponse
@@ -144,6 +145,7 @@ func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 //	@Success		200		{object}	SubscriptionResponse
 //	@Failure		400		{object}	ErrorResponse
 //	@Failure		404		{object}	ErrorResponse
+//	@Failure		409		{object}	ErrorResponse
 //	@Failure		413		{object}	ErrorResponse
 //	@Failure		415		{object}	ErrorResponse
 //	@Failure		500		{object}	ErrorResponse
@@ -591,6 +593,15 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 	case errors.Is(err, model.ErrNotFound):
 		h.writeJSON(w, r, http.StatusNotFound, ErrorResponse{
 			Code:    "not_found",
+			Message: err.Error(),
+		})
+
+	// 409, а не 400: запрос корректен, конфликтует состояние на сервере.
+	// Клиенту незачем править тело, ему нужно закрыть предыдущую подписку.
+	case errors.Is(err, model.ErrConflict):
+		log.Warn("конфликт с существующей подпиской", slog.String("error", err.Error()))
+		h.writeJSON(w, r, http.StatusConflict, ErrorResponse{
+			Code:    "conflict",
 			Message: err.Error(),
 		})
 

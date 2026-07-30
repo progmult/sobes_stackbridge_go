@@ -31,6 +31,10 @@ type repoStub struct {
 }
 
 func (r *repoStub) Create(_ context.Context, sub *model.Subscription) (*model.Subscription, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+
 	sub.ID = uuid.MustParse("7c6f1e2a-6b4e-4c67-9f3f-2f2a1d6b8c11")
 	r.subscription = sub
 
@@ -60,6 +64,10 @@ func (r *repoStub) GetByID(_ context.Context, id uuid.UUID) (*model.Subscription
 }
 
 func (r *repoStub) Update(_ context.Context, sub *model.Subscription) (*model.Subscription, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+
 	if r.notFound {
 		return nil, model.ErrNotFound
 	}
@@ -306,6 +314,45 @@ func TestDetailsOnlyForBody(t *testing.T) {
 
 			if len(payload.Details) != tt.wantDetails {
 				t.Errorf("details = %v, ожидалось %d", payload.Details, tt.wantDetails)
+			}
+
+			if payload.Message == "" {
+				t.Error("message пустой")
+			}
+		})
+	}
+}
+
+// TestConflictReturns409: пересечение с уже сохранённой подпиской — это
+// конфликт состояния, а не ошибка ввода. Тело запроса править нечего, поэтому
+// 409, а не 400.
+func TestConflictReturns409(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		target string
+	}{
+		{name: "создание", method: http.MethodPost, target: "/api/v1/subscriptions"},
+		{name: "обновление", method: http.MethodPut, target: "/api/v1/subscriptions/" + uuid.New().String()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &repoStub{err: model.ErrConflict}
+
+			resp := do(t, newRouter(repo, pingerStub{}), tt.method, tt.target, body("price", `400`))
+
+			if resp.Code != http.StatusConflict {
+				t.Fatalf("код ответа = %d, ожидался 409; тело: %s", resp.Code, resp.Body.String())
+			}
+
+			var payload rest.ErrorResponse
+			if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("ответ не разобрался как JSON: %v", err)
+			}
+
+			if payload.Code != "conflict" {
+				t.Errorf("code = %q, ожидался conflict", payload.Code)
 			}
 
 			if payload.Message == "" {

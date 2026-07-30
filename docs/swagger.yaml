@@ -186,6 +186,10 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/rest.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
         "413":
           description: Request Entity Too Large
           schema:
@@ -301,6 +305,10 @@ paths:
             $ref: '#/definitions/rest.ErrorResponse'
         "404":
           description: Not Found
+          schema:
+            $ref: '#/definitions/rest.ErrorResponse'
+        "409":
+          description: Conflict
           schema:
             $ref: '#/definitions/rest.ErrorResponse'
         "413":

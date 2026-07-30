@@ -512,6 +512,149 @@ func TestRepositoryRoundTrip(t *testing.T) {
 	}
 }
 
+// TestNoOverlappingSubscriptions проверяет ограничение subscriptions_no_overlap
+// на настоящей базе: правило живёт в схеме, а не в Go, и заглушками его не
+// проверить.
+func TestNoOverlappingSubscriptions(t *testing.T) {
+	// Уже сохранённая подписка: с января, бессрочная.
+	existing := fixture{serviceName: "Yandex Plus", price: 400, userID: alice, startMonth: time.January, startYear: 2025}
+
+	tests := []struct {
+		name         string
+		candidate    fixture
+		wantConflict bool
+	}{
+		{
+			name: "тот же сервис за пересекающийся период",
+			candidate: fixture{
+				serviceName: "Yandex Plus", price: 400, userID: alice,
+				startMonth: time.May, startYear: 2025,
+			},
+			wantConflict: true,
+		},
+		{
+			name: "название в другом регистре — тот же сервис",
+			candidate: fixture{
+				serviceName: "yandex plus", price: 400, userID: alice,
+				startMonth: time.May, startYear: 2025,
+			},
+			wantConflict: true,
+		},
+		{
+			name: "период до начала существующей",
+			candidate: fixture{
+				serviceName: "Yandex Plus", price: 400, userID: alice,
+				startMonth: time.October, startYear: 2024,
+				endMonth: time.December, endYear: 2024,
+			},
+		},
+		{
+			name: "другой сервис",
+			candidate: fixture{
+				serviceName: "Netflix", price: 1000, userID: alice,
+				startMonth: time.May, startYear: 2025,
+			},
+		},
+		{
+			name: "другой пользователь",
+			candidate: fixture{
+				serviceName: "Yandex Plus", price: 400, userID: bob,
+				startMonth: time.May, startYear: 2025,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRepository(t)
+			seed(t, r, existing)
+
+			ctx, cancel := context.WithTimeout(t.Context(), queryTimeout)
+			defer cancel()
+
+			_, err := r.Create(ctx, tt.candidate.subscription())
+
+			if tt.wantConflict {
+				if !errors.Is(err, model.ErrConflict) {
+					t.Fatalf("Create() вернул ошибку %v, ожидалась ErrConflict", err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Create() вернул неожиданную ошибку: %v", err)
+			}
+		})
+	}
+}
+
+// TestResubscriptionIsAllowed: закрытая подписка и следующая за ней — законный
+// сценарий, ограничение не должно его запрещать. Проверяется и стык месяцев.
+func TestResubscriptionIsAllowed(t *testing.T) {
+	r := newRepository(t)
+	seed(t, r, fixture{
+		serviceName: "Yandex Plus", price: 400, userID: alice,
+		startMonth: time.January, startYear: 2025,
+		endMonth: time.April, endYear: 2025,
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), queryTimeout)
+	defer cancel()
+
+	// Май — следующий месяц после апреля, пересечения нет.
+	next := fixture{serviceName: "Yandex Plus", price: 500, userID: alice, startMonth: time.May, startYear: 2025}
+	if _, err := r.Create(ctx, next.subscription()); err != nil {
+		t.Fatalf("переподписка с мая отклонена: %v", err)
+	}
+
+	// А апрель входит в закрытый период: end_date включительный.
+	april := fixture{
+		serviceName: "Yandex Plus", price: 400, userID: alice,
+		startMonth: time.April, startYear: 2025,
+		endMonth: time.April, endYear: 2025,
+	}
+	if _, err := r.Create(ctx, april.subscription()); !errors.Is(err, model.ErrConflict) {
+		t.Errorf("Create() за апрель вернул %v, ожидалась ErrConflict", err)
+	}
+}
+
+// TestUpdateIntoOverlapConflicts: ограничение действует и на обновление, при
+// этом запись не конфликтует сама с собой.
+func TestUpdateIntoOverlapConflicts(t *testing.T) {
+	r := newRepository(t)
+	created := seed(t, r,
+		fixture{
+			serviceName: "Yandex Plus", price: 400, userID: alice,
+			startMonth: time.January, startYear: 2025,
+			endMonth: time.April, endYear: 2025,
+		},
+		fixture{
+			serviceName: "Yandex Plus", price: 400, userID: alice,
+			startMonth: time.June, startYear: 2025,
+			endMonth: time.August, endYear: 2025,
+		},
+	)
+
+	ctx, cancel := context.WithTimeout(t.Context(), queryTimeout)
+	defer cancel()
+
+	// Сдвигаем вторую запись на май — пересечения с первой всё ещё нет.
+	second := created[1]
+	mayStart := date(time.May, 2025)
+	second.StartDate = mayStart
+
+	if _, err := r.Update(ctx, &second); err != nil {
+		t.Fatalf("Update() без пересечения вернул ошибку: %v", err)
+	}
+
+	// А сдвиг на март наезжает на первую запись.
+	second.StartDate = date(time.March, 2025)
+	if _, err := r.Update(ctx, &second); !errors.Is(err, model.ErrConflict) {
+		t.Errorf("Update() с пересечением вернул %v, ожидалась ErrConflict", err)
+	}
+}
+
 // TestListFiltersAndPagination проверяет выборку списка: общее количество
 // считается по фильтру, а не по странице.
 func TestListFiltersAndPagination(t *testing.T) {

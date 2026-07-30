@@ -239,6 +239,11 @@ func classify(err error) error {
 	}
 
 	switch pgErr.Code {
+	// Ограничение subscriptions_no_overlap: запрос сам по себе корректен,
+	// противоречит он уже сохранённым данным — это конфликт, а не ошибка ввода.
+	case pgerrcode.ExclusionViolation:
+		return model.ErrConflict
+
 	case pgerrcode.NumericValueOutOfRange,
 		pgerrcode.StringDataRightTruncationDataException,
 		pgerrcode.CheckViolation,
