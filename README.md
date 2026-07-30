@@ -1,5 +1,9 @@
 # Subscriptions API
 
+<!-- Бейдж CI: раскомментируйте и подставьте свои OWNER/REPO после создания репозитория на GitHub.
+![ci](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)
+-->
+
 REST-сервис для агрегации данных об онлайн-подписках пользователей.
 
 Go 1.25, PostgreSQL 16, chi, pgx, golang-migrate, swaggo.
@@ -192,6 +196,11 @@ go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g cmd/api/main.go -o docs
 
 Те же команды собраны в [Makefile](Makefile): `make test`, `make vet`,
 `make swagger`, `make up`, `make down`, `make logs`.
+
+Те же проверки — форматирование, `go vet` и полный прогон тестов — выполняет CI
+на каждый push и pull request: [.github/workflows/ci.yml](.github/workflows/ci.yml).
+На раннере GitHub docker предустановлен, поэтому интеграционные тесты там идут
+по-настоящему.
 
 ## Использование ИИ
 
