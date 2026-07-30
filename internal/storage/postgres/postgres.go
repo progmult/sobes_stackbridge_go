@@ -47,19 +47,6 @@ func Migrate(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("не удалось инициализировать миграции: %w", err)
 	}
-	// Close возвращает две ошибки: по источнику и по соединению. Обе только
-	// логируем — на результат миграции они уже не влияют.
-	defer func() {
-		sourceErr, dbErr := migrator.Close()
-		if sourceErr != nil {
-			log.Error("не удалось закрыть источник миграций", slog.String("error", sourceErr.Error()))
-		}
-
-		if dbErr != nil {
-			log.Error("не удалось закрыть соединение миграций", slog.String("error", dbErr.Error()))
-		}
-	}()
-
 	// golang-migrate не принимает контекст в Up, поэтому миграция уходит в
 	// отдельную горутину, а отмена доводится до неё через GracefulStop.
 	done := make(chan error, 1)
@@ -68,6 +55,11 @@ func Migrate(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 	select {
 	case err := <-done:
+		// Закрывать миграцию можно только здесь, когда Up() уже вернулся.
+		// В defer это делать нельзя: на ветке отмены Up() продолжает работать,
+		// и Close() выдернул бы из-под него источник и соединение.
+		closeMigrator(migrator, log)
+
 		if err != nil {
 			if errors.Is(err, migrate.ErrNoChange) {
 				log.Info("схема БД уже в актуальном состоянии")
@@ -86,10 +78,37 @@ func Migrate(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		default:
 		}
 
+		// GracefulStop останавливает миграцию между файлами, а не посреди
+		// зависшего запроса, поэтому дожидаться Up() здесь нечем. Соединение
+		// остаётся горутине: после этой ошибки процесс завершается с кодом 1,
+		// и живёт оно ровно до выхода.
+		//
+		// Контекст миграций выведен из сигнального, поэтому отмена приходит по
+		// двум разным поводам: Ctrl-C и собственный таймаут. Формулировки
+		// разные — иначе прерванный вручную запуск отчитывался бы о том, что
+		// не уложился во время.
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return fmt.Errorf("применение миграций прервано: %w", ctx.Err())
+		}
+
 		return fmt.Errorf("миграции не уложились в отведённое время: %w", ctx.Err())
 	}
 
 	log.Info("миграции применены")
 
 	return nil
+}
+
+// closeMigrator освобождает источник миграций и соединение с базой. Close
+// возвращает две ошибки — обе только логируем, на результат миграции они уже
+// не влияют.
+func closeMigrator(migrator *migrate.Migrate, log *slog.Logger) {
+	sourceErr, dbErr := migrator.Close()
+	if sourceErr != nil {
+		log.Error("не удалось закрыть источник миграций", slog.String("error", sourceErr.Error()))
+	}
+
+	if dbErr != nil {
+		log.Error("не удалось закрыть соединение миграций", slog.String("error", dbErr.Error()))
+	}
 }

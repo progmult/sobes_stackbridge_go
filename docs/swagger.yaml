@@ -16,7 +16,7 @@ definitions:
         type: array
       message:
         description: Пояснение для человека на русском, без внутренних деталей реализации.
-        example: 'некорректный запрос: стоимость подписки не может быть отрицательной'
+        example: 'некорректный запрос: price: не может быть отрицательной'
         type: string
     type: object
   rest.ListResponse:
