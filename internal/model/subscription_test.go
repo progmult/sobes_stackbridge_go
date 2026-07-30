@@ -17,12 +17,12 @@ func TestParseDate(t *testing.T) {
 		want    time.Time
 		wantErr bool
 	}{
-		{name: "valid", input: "07-2025", want: time.Date(2025, time.July, 1, 0, 0, 0, 0, time.UTC)},
-		{name: "january", input: "01-2025", want: time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)},
-		{name: "month out of range", input: "13-2025", wantErr: true},
-		{name: "full date", input: "23-07-2025", wantErr: true},
-		{name: "wrong separator", input: "07/2025", wantErr: true},
-		{name: "empty", input: "", wantErr: true},
+		{name: "корректная дата", input: "07-2025", want: time.Date(2025, time.July, 1, 0, 0, 0, 0, time.UTC)},
+		{name: "январь", input: "01-2025", want: time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)},
+		{name: "месяц вне диапазона", input: "13-2025", wantErr: true},
+		{name: "дата с днём", input: "23-07-2025", wantErr: true},
+		{name: "чужой разделитель", input: "07/2025", wantErr: true},
+		{name: "пустая строка", input: "", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -31,18 +31,18 @@ func TestParseDate(t *testing.T) {
 
 			if tt.wantErr {
 				if !errors.Is(err, model.ErrValidation) {
-					t.Fatalf("ParseDate(%q) error = %v, want ErrValidation", tt.input, err)
+					t.Fatalf("ParseDate(%q) вернул ошибку %v, ожидалась ErrValidation", tt.input, err)
 				}
 
 				return
 			}
 
 			if err != nil {
-				t.Fatalf("ParseDate(%q) returned unexpected error: %v", tt.input, err)
+				t.Fatalf("ParseDate(%q) вернул неожиданную ошибку: %v", tt.input, err)
 			}
 
 			if !got.Equal(tt.want) {
-				t.Errorf("ParseDate(%q) = %v, want %v", tt.input, got, tt.want)
+				t.Errorf("ParseDate(%q) = %v, ожидалось %v", tt.input, got, tt.want)
 			}
 		})
 	}
@@ -52,7 +52,7 @@ func TestFormatDate(t *testing.T) {
 	got := model.FormatDate(time.Date(2025, time.July, 1, 0, 0, 0, 0, time.UTC))
 
 	if got != "07-2025" {
-		t.Errorf("FormatDate() = %q, want %q", got, "07-2025")
+		t.Errorf("FormatDate() = %q, ожидалось %q", got, "07-2025")
 	}
 }
 
@@ -74,14 +74,14 @@ func TestValidate(t *testing.T) {
 		mutate  func(*model.Subscription)
 		wantErr bool
 	}{
-		{name: "valid subscription", mutate: func(*model.Subscription) {}},
-		{name: "zero price is allowed", mutate: func(s *model.Subscription) { s.Price = 0 }},
-		{name: "empty service name", mutate: func(s *model.Subscription) { s.ServiceName = "" }, wantErr: true},
-		{name: "negative price", mutate: func(s *model.Subscription) { s.Price = -1 }, wantErr: true},
-		{name: "empty user id", mutate: func(s *model.Subscription) { s.UserID = uuid.Nil }, wantErr: true},
-		{name: "empty start date", mutate: func(s *model.Subscription) { s.StartDate = time.Time{} }, wantErr: true},
-		{name: "end date before start date", mutate: func(s *model.Subscription) { s.EndDate = &earlier }, wantErr: true},
-		{name: "end date equals start date", mutate: func(s *model.Subscription) { s.EndDate = &startDate }},
+		{name: "корректная подписка", mutate: func(*model.Subscription) {}},
+		{name: "нулевая стоимость допустима", mutate: func(s *model.Subscription) { s.Price = 0 }},
+		{name: "пустое название сервиса", mutate: func(s *model.Subscription) { s.ServiceName = "" }, wantErr: true},
+		{name: "отрицательная стоимость", mutate: func(s *model.Subscription) { s.Price = -1 }, wantErr: true},
+		{name: "не указан пользователь", mutate: func(s *model.Subscription) { s.UserID = uuid.Nil }, wantErr: true},
+		{name: "не указана дата начала", mutate: func(s *model.Subscription) { s.StartDate = time.Time{} }, wantErr: true},
+		{name: "дата окончания раньше начала", mutate: func(s *model.Subscription) { s.EndDate = &earlier }, wantErr: true},
+		{name: "дата окончания равна началу", mutate: func(s *model.Subscription) { s.EndDate = &startDate }},
 	}
 
 	for _, tt := range tests {
@@ -92,11 +92,11 @@ func TestValidate(t *testing.T) {
 			err := sub.Validate()
 
 			if tt.wantErr && !errors.Is(err, model.ErrValidation) {
-				t.Fatalf("Validate() error = %v, want ErrValidation", err)
+				t.Fatalf("Validate() вернул ошибку %v, ожидалась ErrValidation", err)
 			}
 
 			if !tt.wantErr && err != nil {
-				t.Fatalf("Validate() returned unexpected error: %v", err)
+				t.Fatalf("Validate() вернул неожиданную ошибку: %v", err)
 			}
 		})
 	}
