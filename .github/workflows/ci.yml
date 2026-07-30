@@ -1,0 +1,36 @@
+name: ci
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Версия берётся из go.mod, чтобы CI и разработка не разъезжались.
+      # Модули кешируются по go.sum самим setup-go.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "не отформатированы:"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # На ubuntu-latest docker предустановлен, поэтому интеграционные тесты
+      # поднимают контейнер с PostgreSQL и идут по-настоящему, а не пропускаются.
+      - name: go test
+        run: go test ./... -count=1
