@@ -1,8 +1,6 @@
 # Subscriptions API
 
-<!-- Бейдж CI: раскомментируйте и подставьте свои OWNER/REPO после создания репозитория на GitHub.
-![ci](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)
--->
+[![ci](https://github.com/progmult/sobes_stackbridge_go/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/progmult/sobes_stackbridge_go/actions/workflows/ci.yml)
 
 REST-сервис для агрегации данных об онлайн-подписках пользователей.
 
