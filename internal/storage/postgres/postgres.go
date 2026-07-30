@@ -34,11 +34,9 @@ func NewPool(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 // Migrate накатывает миграции из migrations/ до последней версии.
 // Повторный запуск ничего не меняет.
 //
-// Контекст ограничивает время миграции: без него недоступная или медленная
-// база подвешивает старт сервиса бессрочно, и снаружи это выглядит зависанием,
-// а не отказом. Повторных попыток здесь нет намеренно: в docker compose их
-// заменяет depends_on с healthcheck, в kubernetes — рестарт пода, который
-// корректно происходит благодаря коду возврата 1.
+// Контекст ограничивает время миграции: без него недоступная база подвешивала
+// бы старт сервиса бессрочно. Повторных попыток нет намеренно — их заменяет
+// depends_on с healthcheck в compose и рестарт пода в kubernetes.
 func Migrate(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	source, err := iofs.New(migrations.FS, ".")
 	if err != nil {
@@ -49,8 +47,8 @@ func Migrate(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("не удалось инициализировать миграции: %w", err)
 	}
-	// Close возвращает две ошибки: по источнику миграций и по соединению с БД.
-	// Обе только логируем — на результат самой миграции они уже не влияют.
+	// Close возвращает две ошибки: по источнику и по соединению. Обе только
+	// логируем — на результат миграции они уже не влияют.
 	defer func() {
 		sourceErr, dbErr := migrator.Close()
 		if sourceErr != nil {
