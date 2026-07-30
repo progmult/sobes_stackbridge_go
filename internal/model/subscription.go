@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -69,24 +70,72 @@ func FormatDate(date time.Time) string {
 	return date.Format(DateLayout)
 }
 
-// Validate проверяет запись перед сохранением в базу.
-func (s *Subscription) Validate() error {
-	switch {
-	case s.ServiceName == "":
-		return fmt.Errorf("%w: название сервиса не может быть пустым", ErrValidation)
-	case utf8.RuneCountInString(s.ServiceName) > MaxServiceNameLength:
-		return fmt.Errorf("%w: название сервиса длиннее %d символов", ErrValidation, MaxServiceNameLength)
-	case s.Price < 0:
-		return fmt.Errorf("%w: стоимость подписки не может быть отрицательной", ErrValidation)
-	case s.Price > MaxPrice:
-		return fmt.Errorf("%w: стоимость подписки не может превышать %d", ErrValidation, MaxPrice)
-	case s.UserID == uuid.Nil:
-		return fmt.Errorf("%w: не указан идентификатор пользователя", ErrValidation)
-	case s.StartDate.IsZero():
-		return fmt.Errorf("%w: не указана дата начала подписки", ErrValidation)
-	case s.EndDate != nil && s.EndDate.Before(s.StartDate):
-		return fmt.Errorf("%w: дата окончания не может быть раньше даты начала", ErrValidation)
+// ValidationError перечисляет все нарушения сразу: клиенту удобнее увидеть
+// полный список, чем чинить поля по одному запросу.
+type ValidationError struct {
+	Violations []string
+}
+
+// NewValidationError собирает ошибку из перечня нарушений. Пустой перечень
+// означает, что нарушений нет, и возвращается nil.
+func NewValidationError(violations ...string) error {
+	if len(violations) == 0 {
+		return nil
+	}
+
+	return &ValidationError{Violations: violations}
+}
+
+func (e *ValidationError) Error() string {
+	return ErrValidation.Error() + ": " + strings.Join(e.Violations, "; ")
+}
+
+// Unwrap возвращает sentinel, поэтому errors.Is(err, ErrValidation) работает
+// так же, как для одиночных ошибок валидации.
+func (e *ValidationError) Unwrap() error { return ErrValidation }
+
+// Violations достаёт перечень нарушений, если ошибка его несёт.
+func Violations(err error) []string {
+	var validationErr *ValidationError
+	if errors.As(err, &validationErr) {
+		return validationErr.Violations
 	}
 
 	return nil
+}
+
+// Validate проверяет запись перед сохранением в базу и возвращает сразу все
+// нарушения, а не первое встреченное.
+func (s *Subscription) Validate() error {
+	var violations []string
+
+	// Взаимоисключающие проверки одного поля остаются switch: пустое название
+	// не может быть одновременно слишком длинным.
+	switch {
+	case s.ServiceName == "":
+		violations = append(violations, "название сервиса не может быть пустым")
+	case utf8.RuneCountInString(s.ServiceName) > MaxServiceNameLength:
+		violations = append(violations, fmt.Sprintf("название сервиса длиннее %d символов", MaxServiceNameLength))
+	}
+
+	switch {
+	case s.Price < 0:
+		violations = append(violations, "стоимость подписки не может быть отрицательной")
+	case s.Price > MaxPrice:
+		violations = append(violations, fmt.Sprintf("стоимость подписки не может превышать %d", MaxPrice))
+	}
+
+	if s.UserID == uuid.Nil {
+		violations = append(violations, "не указан идентификатор пользователя")
+	}
+
+	if s.StartDate.IsZero() {
+		violations = append(violations, "не указана дата начала подписки")
+	}
+
+	if s.EndDate != nil && s.EndDate.Before(s.StartDate) {
+		violations = append(violations, "дата окончания не может быть раньше даты начала")
+	}
+
+	return NewValidationError(violations...)
 }

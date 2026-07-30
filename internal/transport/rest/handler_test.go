@@ -176,6 +176,117 @@ func TestCreateRejectsBadRequests(t *testing.T) {
 	}
 }
 
+// TestCreateReportsAllViolations закрепляет, что проверка не обрывается на
+// первой ошибке: клиент должен увидеть все проблемные поля за один запрос.
+func TestCreateReportsAllViolations(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			name: "нарушены инварианты записи",
+			body: `{"service_name":"","price":-1,"user_id":"` + uuid.Nil.String() + `","start_date":"07-2025","end_date":"01-2025"}`,
+			want: []string{
+				"название сервиса не может быть пустым",
+				"стоимость подписки не может быть отрицательной",
+				"не указан идентификатор пользователя",
+				"дата окончания не может быть раньше даты начала",
+			},
+		},
+		{
+			name: "не разобрались несколько полей",
+			body: `{"service_name":"X","user_id":"не-uuid","start_date":"2025-07","end_date":"тоже-не-дата"}`,
+			want: []string{
+				"не указана стоимость подписки",
+				"user_id должен быть корректным UUID",
+				"дата начала должна быть в формате MM-YYYY, например 07-2025",
+				"дата окончания должна быть в формате MM-YYYY, например 12-2025",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := do(t, newRouter(&repoStub{}, pingerStub{}), http.MethodPost, "/api/v1/subscriptions", tt.body)
+
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("код ответа = %d, ожидался 400; тело: %s", resp.Code, resp.Body.String())
+			}
+
+			var payload rest.ErrorResponse
+			if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("ответ не разобрался как JSON: %v", err)
+			}
+
+			if len(payload.Details) != len(tt.want) {
+				t.Fatalf("details = %q, ожидалось %d нарушений", payload.Details, len(tt.want))
+			}
+
+			for i, want := range tt.want {
+				if payload.Details[i] != want {
+					t.Errorf("details[%d] = %q, ожидалось %q", i, payload.Details[i], want)
+				}
+			}
+
+			// Тот же перечень должен читаться и из message — клиентом, который
+			// про details не знает.
+			for _, want := range tt.want {
+				if !strings.Contains(payload.Message, want) {
+					t.Errorf("в message нет нарушения %q: %s", want, payload.Message)
+				}
+			}
+		})
+	}
+}
+
+// TestDetailsOnlyForBody разграничивает две ситуации: перечень нарушений
+// сопровождает проверку тела запроса, а у ошибок в query-параметрах его нет —
+// там нарушение всегда одно и целиком помещается в message.
+func TestDetailsOnlyForBody(t *testing.T) {
+	tests := []struct {
+		name        string
+		method      string
+		target      string
+		body        string
+		wantDetails int
+	}{
+		{
+			name:   "одно нарушение в теле",
+			method: http.MethodPost, target: "/api/v1/subscriptions", body: body("price", `-1`),
+			wantDetails: 1,
+		},
+		{
+			name:   "ошибка в query-параметре",
+			method: http.MethodGet, target: "/api/v1/subscriptions?limit=0",
+			wantDetails: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := do(t, newRouter(&repoStub{}, pingerStub{}), tt.method, tt.target, tt.body)
+
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("код ответа = %d, ожидался 400; тело: %s", resp.Code, resp.Body.String())
+			}
+
+			var payload rest.ErrorResponse
+			if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("ответ не разобрался как JSON: %v", err)
+			}
+
+			if len(payload.Details) != tt.wantDetails {
+				t.Errorf("details = %q, ожидалось %d", payload.Details, tt.wantDetails)
+			}
+
+			if payload.Message == "" {
+				t.Error("message пустой")
+			}
+		})
+	}
+}
+
 func TestCreateSuccess(t *testing.T) {
 	repo := &repoStub{}
 	resp := do(t, newRouter(repo, pingerStub{}), http.MethodPost, "/api/v1/subscriptions", body("price", `400`))

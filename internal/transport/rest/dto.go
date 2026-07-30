@@ -1,8 +1,8 @@
 package rest
 
 import (
-	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -24,39 +24,54 @@ type SubscriptionRequest struct {
 }
 
 // toModel переводит тело запроса в доменную модель, проверяя формат полей.
+// Разбор не прекращается на первой ошибке: клиент получает перечень всех
+// полей, которые надо починить.
+//
+// Инварианты записи проверяет model.Validate уже после разбора — на значениях,
+// которые не удалось разобрать, проверять нечего.
 func (r SubscriptionRequest) toModel(id uuid.UUID) (*model.Subscription, error) {
+	var violations []string
+
+	price := 0
 	if r.Price == nil {
-		return nil, fmt.Errorf("%w: не указана стоимость подписки", model.ErrValidation)
+		violations = append(violations, "не указана стоимость подписки")
+	} else {
+		price = *r.Price
 	}
 
 	userID, err := uuid.Parse(strings.TrimSpace(r.UserID))
 	if err != nil {
-		return nil, fmt.Errorf("%w: user_id должен быть корректным UUID", model.ErrValidation)
+		violations = append(violations, "user_id должен быть корректным UUID")
 	}
 
 	startDate, err := model.ParseDate(strings.TrimSpace(r.StartDate))
 	if err != nil {
-		return nil, fmt.Errorf("%w: дата начала должна быть в формате MM-YYYY, например 07-2025", model.ErrValidation)
+		violations = append(violations, "дата начала должна быть в формате MM-YYYY, например 07-2025")
 	}
 
-	sub := &model.Subscription{
-		ID:          id,
-		ServiceName: r.ServiceName,
-		Price:       *r.Price,
-		UserID:      userID,
-		StartDate:   startDate,
-	}
+	var endDate *time.Time
 
 	if strings.TrimSpace(r.EndDate) != "" {
-		endDate, err := model.ParseDate(strings.TrimSpace(r.EndDate))
+		parsed, err := model.ParseDate(strings.TrimSpace(r.EndDate))
 		if err != nil {
-			return nil, fmt.Errorf("%w: дата окончания должна быть в формате MM-YYYY, например 12-2025", model.ErrValidation)
+			violations = append(violations, "дата окончания должна быть в формате MM-YYYY, например 12-2025")
+		} else {
+			endDate = &parsed
 		}
-
-		sub.EndDate = &endDate
 	}
 
-	return sub, nil
+	if err := model.NewValidationError(violations...); err != nil {
+		return nil, err
+	}
+
+	return &model.Subscription{
+		ID:          id,
+		ServiceName: r.ServiceName,
+		Price:       price,
+		UserID:      userID,
+		StartDate:   startDate,
+		EndDate:     endDate,
+	}, nil
 }
 
 // SubscriptionResponse — представление подписки в ответах API.
@@ -115,4 +130,7 @@ type ErrorResponse struct {
 	Code string `json:"code" example:"validation_error"`
 	// Пояснение для человека на русском, без внутренних деталей реализации.
 	Message string `json:"message" example:"некорректный запрос: стоимость подписки не может быть отрицательной"`
+	// Перечень нарушений, если их несколько. Заполняется при проверке тела
+	// запроса, чтобы клиент увидел все проблемные поля разом.
+	Details []string `json:"details,omitempty" example:"название сервиса не может быть пустым,стоимость подписки не может быть отрицательной"`
 }

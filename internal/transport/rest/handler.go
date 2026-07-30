@@ -584,6 +584,8 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		h.writeJSON(w, r, http.StatusBadRequest, ErrorResponse{
 			Code:    "validation_error",
 			Message: err.Error(),
+			// Пусто, когда нарушение одно: тогда всё сказано в message.
+			Details: model.Violations(err),
 		})
 
 	case errors.Is(err, model.ErrNotFound):
