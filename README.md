@@ -192,3 +192,8 @@ go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g cmd/api/main.go -o docs
 
 Те же команды собраны в [Makefile](Makefile): `make test`, `make vet`,
 `make swagger`, `make up`, `make down`, `make logs`.
+
+## Использование ИИ
+
+При работе над сервисом использовалась помощь ИИ — Claude Opus 5 (Anthropic)
+в среде Claude Code.
