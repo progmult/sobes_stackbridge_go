@@ -2,6 +2,7 @@ package model_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,5 +100,53 @@ func TestValidate(t *testing.T) {
 				t.Fatalf("Validate() вернул неожиданную ошибку: %v", err)
 			}
 		})
+	}
+}
+
+// TestValidateCollectsAllViolations закрепляет, что проверка не обрывается на
+// первом нарушении.
+func TestValidateCollectsAllViolations(t *testing.T) {
+	endDate := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	sub := model.Subscription{
+		ServiceName: "",
+		Price:       -1,
+		UserID:      uuid.Nil,
+		StartDate:   time.Date(2025, time.July, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:     &endDate,
+	}
+
+	err := sub.Validate()
+
+	if !errors.Is(err, model.ErrValidation) {
+		t.Fatalf("Validate() вернул ошибку %v, ожидалась ErrValidation", err)
+	}
+
+	violations := model.Violations(err)
+	if len(violations) != 4 {
+		t.Fatalf("нарушений = %d (%q), ожидалось 4", len(violations), violations)
+	}
+
+	// В сообщении должны быть перечислены все нарушения, а не первое.
+	for _, want := range violations {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("в сообщении нет нарушения %q: %s", want, err.Error())
+		}
+	}
+}
+
+// TestValidateReportsExclusiveViolationOnce: пустое название не может быть
+// одновременно слишком длинным, поэтому нарушение по полю ровно одно.
+func TestValidateReportsExclusiveViolationOnce(t *testing.T) {
+	sub := model.Subscription{
+		ServiceName: "",
+		Price:       400,
+		UserID:      uuid.MustParse("60601fee-2bf1-4721-ae6f-7636e79a0cba"),
+		StartDate:   time.Date(2025, time.July, 1, 0, 0, 0, 0, time.UTC),
+	}
+
+	violations := model.Violations(sub.Validate())
+	if len(violations) != 1 {
+		t.Errorf("нарушений = %d (%q), ожидалось 1", len(violations), violations)
 	}
 }
