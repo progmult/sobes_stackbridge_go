@@ -40,7 +40,7 @@ func (r *SubscriptionRepository) Create(ctx context.Context, sub *model.Subscrip
 
 	created, err := scan(row)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось создать подписку: %w", classify(err))
+		return nil, wrapWrite("не удалось создать подписку", err)
 	}
 
 	return created, nil
@@ -78,7 +78,7 @@ func (r *SubscriptionRepository) Update(ctx context.Context, sub *model.Subscrip
 			return nil, model.ErrNotFound
 		}
 
-		return nil, fmt.Errorf("не удалось обновить подписку: %w", classify(err))
+		return nil, wrapWrite("не удалось обновить подписку", err)
 	}
 
 	return updated, nil
@@ -222,6 +222,23 @@ func whereClause(conditions []string) string {
 	}
 
 	return " WHERE " + strings.Join(conditions, " AND ")
+}
+
+// wrapWrite переводит ошибку записи в доменную.
+//
+// Доменные ошибки уходят наружу без обёртки: их формулировка попадает клиенту,
+// и ему важно, что не так с состоянием, а не какую операцию не смог выполнить
+// сервер. Так же ведёт себя ErrNotFound в соседних методах. Обёртка остаётся
+// для всего остального — там текст виден только в логе, и знать, на чём именно
+// сломалось, полезно.
+func wrapWrite(action string, err error) error {
+	classified := classify(err)
+
+	if errors.Is(classified, model.ErrConflict) || errors.Is(classified, model.ErrValidation) {
+		return classified
+	}
+
+	return fmt.Errorf("%s: %w", action, classified)
 }
 
 // classify переводит ошибки Postgres, вызванные значениями из запроса клиента,

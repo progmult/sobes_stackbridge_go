@@ -619,6 +619,88 @@ func TestResubscriptionIsAllowed(t *testing.T) {
 	}
 }
 
+// TestUpdateDoesNotConflictWithItself — место, где схема с EXCLUDE обычно и
+// ломается: запись сравнивается сама с собой и любое обновление упирается в
+// собственный период. README обещает идемпотентность PUT, поэтому случай
+// закреплён отдельно.
+func TestUpdateDoesNotConflictWithItself(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*model.Subscription)
+	}{
+		{name: "те же значения", mutate: func(*model.Subscription) {}},
+		{name: "другая стоимость", mutate: func(s *model.Subscription) { s.Price = 500 }},
+		{
+			name: "период расширен",
+			mutate: func(s *model.Subscription) {
+				end := date(time.December, 2025)
+				s.EndDate = &end
+			},
+		},
+		{
+			name:   "начало сдвинуто",
+			mutate: func(s *model.Subscription) { s.StartDate = date(time.February, 2025) },
+		},
+		{name: "подписка стала бессрочной", mutate: func(s *model.Subscription) { s.EndDate = nil }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRepository(t)
+			created := seed(t, r, fixture{
+				serviceName: "Yandex Plus", price: 400, userID: alice,
+				startMonth: time.January, startYear: 2025,
+				endMonth: time.June, endYear: 2025,
+			})[0]
+
+			ctx, cancel := context.WithTimeout(t.Context(), queryTimeout)
+			defer cancel()
+
+			updated := created
+			tt.mutate(&updated)
+
+			if _, err := r.Update(ctx, &updated); err != nil {
+				t.Errorf("Update() вернул ошибку: %v", err)
+			}
+		})
+	}
+}
+
+// TestConflictMessageHasNoStoragePrefix: наружу уходит формулировка о состоянии,
+// а не о том, какую операцию не смог выполнить сервер. Для ErrNotFound это уже
+// так, конфликт не должен выбиваться.
+func TestConflictMessageHasNoStoragePrefix(t *testing.T) {
+	existing := fixture{serviceName: "Yandex Plus", price: 400, userID: alice, startMonth: time.January, startYear: 2025}
+	overlapping := fixture{serviceName: "Yandex Plus", price: 400, userID: alice, startMonth: time.May, startYear: 2025}
+
+	r := newRepository(t)
+	created := seed(t, r, existing)[0]
+
+	ctx, cancel := context.WithTimeout(t.Context(), queryTimeout)
+	defer cancel()
+
+	_, err := r.Create(ctx, overlapping.subscription())
+	if err == nil {
+		t.Fatal("Create() пересекающейся подписки не вернул ошибку")
+	}
+
+	if err.Error() != model.ErrConflict.Error() {
+		t.Errorf("сообщение Create() = %q, ожидалось %q", err, model.ErrConflict)
+	}
+
+	// То же самое на обновлении: там префикс был бы «не удалось обновить».
+	conflicting := created
+	conflicting.ID = seed(t, r, fixture{
+		serviceName: "Netflix", price: 1000, userID: alice, startMonth: time.May, startYear: 2025,
+	})[0].ID
+	conflicting.ServiceName = "Yandex Plus"
+	conflicting.StartDate = date(time.May, 2025)
+
+	if _, err := r.Update(ctx, &conflicting); err.Error() != model.ErrConflict.Error() {
+		t.Errorf("сообщение Update() = %q, ожидалось %q", err, model.ErrConflict)
+	}
+}
+
 // TestUpdateIntoOverlapConflicts: ограничение действует и на обновление, при
 // этом запись не конфликтует сама с собой.
 func TestUpdateIntoOverlapConflicts(t *testing.T) {
