@@ -56,8 +56,8 @@ func NewRouter(h *Handler, log *slog.Logger) http.Handler {
 }
 
 // recoverer перехватывает панику и отвечает тем же форматом ошибки, что и
-// остальной API. Штатный chi middleware.Recoverer отдаёт пустой 500, из-за
-// чего клиент, разбирающий code/message, ломался бы именно в аварии.
+// остальной API: штатный chi middleware.Recoverer отдаёт пустой 500, и клиент,
+// разбирающий code/message, ломался бы именно в аварии.
 func (h *Handler) recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {

@@ -30,8 +30,7 @@ const (
 	healthTimeout = 2 * time.Second
 )
 
-// Границы размера страницы. Это политика HTTP-слоя, а не доменный инвариант:
-// сколько записей отдавать за раз — вопрос протокола, а не предметной области.
+// Границы размера страницы — политика HTTP-слоя, а не доменный инвариант.
 const (
 	DefaultLimit = 50
 	MaxLimit     = 200
@@ -314,9 +313,8 @@ func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 
 // Health проверяет, что сервис жив и база отвечает.
 //
-// В swagger не выносится намеренно: ручка живёт вне /api/v1, а swagger
-// склеивает пути с basePath и в UI запрашивал бы несуществующий
-// /api/v1/healthz.
+// В swagger не выносится: ручка живёт вне /api/v1, а swagger склеил бы путь с
+// basePath и запрашивал несуществующий /api/v1/healthz.
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), healthTimeout)
 	defer cancel()
@@ -336,10 +334,8 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 
 // decodeRequest разбирает тело запроса.
 //
-// Декодер настроен строго: неизвестные поля отвергаются, а не игнорируются
-// молча. Это важно из-за семантики PUT — он перезаписывает запись целиком,
-// поэтому опечатка в имени поля без этой проверки не вернула бы ошибку,
-// а обнулила бы значение.
+// Неизвестные поля отвергаются из-за семантики PUT: он перезаписывает запись
+// целиком, и опечатка в имени поля молча обнулила бы значение.
 func decodeRequest(w http.ResponseWriter, r *http.Request) (SubscriptionRequest, error) {
 	if err := checkContentType(r); err != nil {
 		return SubscriptionRequest{}, err
@@ -363,9 +359,8 @@ func decodeRequest(w http.ResponseWriter, r *http.Request) (SubscriptionRequest,
 	return req, nil
 }
 
-// clientError разделяет два представления одной ошибки: публичную
-// формулировку для клиента и исходную причину для лога. Наружу уходит только
-// первая, в лог пишутся обе — иначе диагноз теряется безвозвратно.
+// clientError хранит два представления одной ошибки: публичную формулировку
+// для клиента и исходную причину для лога.
 type clientError struct {
 	public error
 	cause  error
@@ -398,10 +393,9 @@ func causeOf(err error) error {
 
 // decodeError переводит ошибку разбора JSON в сообщение для клиента.
 //
-// Текст ошибки стандартной библиотеки наружу не отдаётся: он на английском и
-// содержит имена Go-структур, их полей и внутренних типов. Клиенту сообщается
-// только то, что относится к его собственному запросу, а исходная ошибка
-// сохраняется как причина и попадает в лог.
+// Текст стандартной библиотеки наружу не отдаётся: он содержит имена
+// Go-структур и внутренних типов. Исходная ошибка сохраняется как причина и
+// попадает в лог.
 func decodeError(err error) error {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
@@ -431,9 +425,8 @@ func decodeError(err error) error {
 	return withCause(fmt.Errorf("%w: тело запроса не является корректным JSON", model.ErrValidation), err)
 }
 
-// unknownField достаёт имя поля из ошибки DisallowUnknownFields. Отдельного
-// типа для неё в стандартной библиотеке нет, есть только текст фиксированного
-// формата; если он изменится, вернётся общая формулировка.
+// unknownField достаёт имя поля из ошибки DisallowUnknownFields: своего типа
+// для неё в стандартной библиотеке нет, только текст фиксированного формата.
 func unknownField(err error) (string, bool) {
 	const prefix = "json: unknown field "
 
@@ -446,8 +439,7 @@ func unknownField(err error) (string, bool) {
 }
 
 // checkContentType отвергает тело в чужом формате. Отсутствующий заголовок
-// допускается: часть клиентов его не ставит, а тело всё равно разбирается
-// как JSON.
+// допускается: часть клиентов его не ставит.
 func checkContentType(r *http.Request) error {
 	value := r.Header.Get("Content-Type")
 	if value == "" {

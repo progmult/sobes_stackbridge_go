@@ -69,7 +69,7 @@ func TestCreateRejectsInvalidSubscription(t *testing.T) {
 	_, err := newService(&repoStub{}).Create(context.Background(), sub)
 
 	if !errors.Is(err, model.ErrValidation) {
-		t.Fatalf("Create() error = %v, want ErrValidation", err)
+		t.Fatalf("Create() вернул ошибку %v, ожидалась ErrValidation", err)
 	}
 }
 
@@ -84,11 +84,11 @@ func TestCreateTrimsServiceName(t *testing.T) {
 	}
 
 	if _, err := newService(repo).Create(context.Background(), sub); err != nil {
-		t.Fatalf("Create() returned unexpected error: %v", err)
+		t.Fatalf("Create() вернул неожиданную ошибку: %v", err)
 	}
 
 	if repo.created.ServiceName != "Yandex Plus" {
-		t.Errorf("ServiceName = %q, want %q", repo.created.ServiceName, "Yandex Plus")
+		t.Errorf("ServiceName = %q, ожидалось %q", repo.created.ServiceName, "Yandex Plus")
 	}
 }
 
@@ -99,7 +99,7 @@ func TestSummaryRejectsInvertedPeriod(t *testing.T) {
 	_, err := newService(&repoStub{}).Summary(context.Background(), from, to, model.Filter{})
 
 	if !errors.Is(err, model.ErrValidation) {
-		t.Fatalf("Summary() error = %v, want ErrValidation", err)
+		t.Fatalf("Summary() вернул ошибку %v, ожидалась ErrValidation", err)
 	}
 }
 
@@ -111,14 +111,14 @@ func TestSummaryReturnsRepositoryTotal(t *testing.T) {
 
 	total, err := newService(repo).Summary(context.Background(), from, to, model.Filter{})
 	if err != nil {
-		t.Fatalf("Summary() returned unexpected error: %v", err)
+		t.Fatalf("Summary() вернул неожиданную ошибку: %v", err)
 	}
 
 	if total != 4800 {
-		t.Errorf("Summary() = %d, want %d", total, 4800)
+		t.Errorf("Summary() = %d, ожидалось %d", total, 4800)
 	}
 
 	if !repo.from.Equal(from) || !repo.to.Equal(to) {
-		t.Errorf("repository got period %v..%v, want %v..%v", repo.from, repo.to, from, to)
+		t.Errorf("в хранилище ушёл период %v..%v, ожидался %v..%v", repo.from, repo.to, from, to)
 	}
 }
