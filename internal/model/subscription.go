@@ -70,15 +70,36 @@ func FormatDate(date time.Time) string {
 	return date.Format(DateLayout)
 }
 
+// Имена полей записи для сообщений об ошибках. Одни и те же имена носят поля
+// JSON и колонки таблицы, поэтому отдельного словаря для перевода между слоями
+// не нужно.
+const (
+	FieldServiceName = "service_name"
+	FieldPrice       = "price"
+	FieldUserID      = "user_id"
+	FieldStartDate   = "start_date"
+	FieldEndDate     = "end_date"
+)
+
+// Violation — одно нарушение с указанием поля, к которому оно относится.
+// Сообщение сформулировано относительно поля («не может быть пустым»), чтобы
+// имя не дублировалось в тексте.
+type Violation struct {
+	Field   string
+	Message string
+}
+
+func (v Violation) String() string { return v.Field + ": " + v.Message }
+
 // ValidationError перечисляет все нарушения сразу: клиенту удобнее увидеть
 // полный список, чем чинить поля по одному запросу.
 type ValidationError struct {
-	Violations []string
+	Violations []Violation
 }
 
 // NewValidationError собирает ошибку из перечня нарушений. Пустой перечень
 // означает, что нарушений нет, и возвращается nil.
-func NewValidationError(violations ...string) error {
+func NewValidationError(violations ...Violation) error {
 	if len(violations) == 0 {
 		return nil
 	}
@@ -87,7 +108,12 @@ func NewValidationError(violations ...string) error {
 }
 
 func (e *ValidationError) Error() string {
-	return ErrValidation.Error() + ": " + strings.Join(e.Violations, "; ")
+	parts := make([]string, 0, len(e.Violations))
+	for _, violation := range e.Violations {
+		parts = append(parts, violation.String())
+	}
+
+	return ErrValidation.Error() + ": " + strings.Join(parts, "; ")
 }
 
 // Unwrap возвращает sentinel, поэтому errors.Is(err, ErrValidation) работает
@@ -95,7 +121,7 @@ func (e *ValidationError) Error() string {
 func (e *ValidationError) Unwrap() error { return ErrValidation }
 
 // Violations достаёт перечень нарушений, если ошибка его несёт.
-func Violations(err error) []string {
+func Violations(err error) []Violation {
 	var validationErr *ValidationError
 	if errors.As(err, &validationErr) {
 		return validationErr.Violations
@@ -107,34 +133,37 @@ func Violations(err error) []string {
 // Validate проверяет запись перед сохранением в базу и возвращает сразу все
 // нарушения, а не первое встреченное.
 func (s *Subscription) Validate() error {
-	var violations []string
+	var violations []Violation
 
 	// Взаимоисключающие проверки одного поля остаются switch: пустое название
 	// не может быть одновременно слишком длинным.
 	switch {
 	case s.ServiceName == "":
-		violations = append(violations, "название сервиса не может быть пустым")
+		violations = append(violations, Violation{FieldServiceName, "не может быть пустым"})
 	case utf8.RuneCountInString(s.ServiceName) > MaxServiceNameLength:
-		violations = append(violations, fmt.Sprintf("название сервиса длиннее %d символов", MaxServiceNameLength))
+		violations = append(violations, Violation{
+			FieldServiceName,
+			fmt.Sprintf("длиннее %d символов", MaxServiceNameLength),
+		})
 	}
 
 	switch {
 	case s.Price < 0:
-		violations = append(violations, "стоимость подписки не может быть отрицательной")
+		violations = append(violations, Violation{FieldPrice, "не может быть отрицательной"})
 	case s.Price > MaxPrice:
-		violations = append(violations, fmt.Sprintf("стоимость подписки не может превышать %d", MaxPrice))
+		violations = append(violations, Violation{FieldPrice, fmt.Sprintf("не может превышать %d", MaxPrice)})
 	}
 
 	if s.UserID == uuid.Nil {
-		violations = append(violations, "не указан идентификатор пользователя")
+		violations = append(violations, Violation{FieldUserID, "не указан"})
 	}
 
 	if s.StartDate.IsZero() {
-		violations = append(violations, "не указана дата начала подписки")
+		violations = append(violations, Violation{FieldStartDate, "не указана"})
 	}
 
 	if s.EndDate != nil && s.EndDate.Before(s.StartDate) {
-		violations = append(violations, "дата окончания не может быть раньше даты начала")
+		violations = append(violations, Violation{FieldEndDate, "не может быть раньше даты начала"})
 	}
 
 	return NewValidationError(violations...)
