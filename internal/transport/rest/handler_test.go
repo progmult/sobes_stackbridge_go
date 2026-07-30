@@ -182,26 +182,26 @@ func TestCreateReportsAllViolations(t *testing.T) {
 	tests := []struct {
 		name string
 		body string
-		want []string
+		want []rest.ViolationResponse
 	}{
 		{
 			name: "нарушены инварианты записи",
 			body: `{"service_name":"","price":-1,"user_id":"` + uuid.Nil.String() + `","start_date":"07-2025","end_date":"01-2025"}`,
-			want: []string{
-				"название сервиса не может быть пустым",
-				"стоимость подписки не может быть отрицательной",
-				"не указан идентификатор пользователя",
-				"дата окончания не может быть раньше даты начала",
+			want: []rest.ViolationResponse{
+				{Field: "service_name", Message: "не может быть пустым"},
+				{Field: "price", Message: "не может быть отрицательной"},
+				{Field: "user_id", Message: "не указан"},
+				{Field: "end_date", Message: "не может быть раньше даты начала"},
 			},
 		},
 		{
 			name: "не разобрались несколько полей",
 			body: `{"service_name":"X","user_id":"не-uuid","start_date":"2025-07","end_date":"тоже-не-дата"}`,
-			want: []string{
-				"не указана стоимость подписки",
-				"user_id должен быть корректным UUID",
-				"дата начала должна быть в формате MM-YYYY, например 07-2025",
-				"дата окончания должна быть в формате MM-YYYY, например 12-2025",
+			want: []rest.ViolationResponse{
+				{Field: "price", Message: "не указана"},
+				{Field: "user_id", Message: "должен быть корректным UUID"},
+				{Field: "start_date", Message: "должна быть в формате MM-YYYY, например 07-2025"},
+				{Field: "end_date", Message: "должна быть в формате MM-YYYY, например 12-2025"},
 			},
 		},
 	}
@@ -220,20 +220,20 @@ func TestCreateReportsAllViolations(t *testing.T) {
 			}
 
 			if len(payload.Details) != len(tt.want) {
-				t.Fatalf("details = %q, ожидалось %d нарушений", payload.Details, len(tt.want))
+				t.Fatalf("details = %v, ожидалось %d нарушений", payload.Details, len(tt.want))
 			}
 
 			for i, want := range tt.want {
 				if payload.Details[i] != want {
-					t.Errorf("details[%d] = %q, ожидалось %q", i, payload.Details[i], want)
+					t.Errorf("details[%d] = %v, ожидалось %v", i, payload.Details[i], want)
 				}
 			}
 
 			// Тот же перечень должен читаться и из message — клиентом, который
 			// про details не знает.
 			for _, want := range tt.want {
-				if !strings.Contains(payload.Message, want) {
-					t.Errorf("в message нет нарушения %q: %s", want, payload.Message)
+				if !strings.Contains(payload.Message, want.Field+": "+want.Message) {
+					t.Errorf("в message нет нарушения по полю %q: %s", want.Field, payload.Message)
 				}
 			}
 		})
@@ -277,7 +277,7 @@ func TestDetailsOnlyForBody(t *testing.T) {
 			}
 
 			if len(payload.Details) != tt.wantDetails {
-				t.Errorf("details = %q, ожидалось %d", payload.Details, tt.wantDetails)
+				t.Errorf("details = %v, ожидалось %d", payload.Details, tt.wantDetails)
 			}
 
 			if payload.Message == "" {

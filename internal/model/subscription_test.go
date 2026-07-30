@@ -123,14 +123,22 @@ func TestValidateCollectsAllViolations(t *testing.T) {
 	}
 
 	violations := model.Violations(err)
-	if len(violations) != 4 {
-		t.Fatalf("нарушений = %d (%q), ожидалось 4", len(violations), violations)
+
+	wantFields := []string{model.FieldServiceName, model.FieldPrice, model.FieldUserID, model.FieldEndDate}
+	if len(violations) != len(wantFields) {
+		t.Fatalf("нарушений = %d (%v), ожидалось %d", len(violations), violations, len(wantFields))
 	}
 
-	// В сообщении должны быть перечислены все нарушения, а не первое.
-	for _, want := range violations {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("в сообщении нет нарушения %q: %s", want, err.Error())
+	for i, want := range wantFields {
+		if violations[i].Field != want {
+			t.Errorf("нарушение %d относится к полю %q, ожидалось %q", i, violations[i].Field, want)
+		}
+	}
+
+	// В сообщении должны быть перечислены все нарушения с именами полей.
+	for _, violation := range violations {
+		if !strings.Contains(err.Error(), violation.Field+": "+violation.Message) {
+			t.Errorf("в сообщении нет нарушения %q: %s", violation, err.Error())
 		}
 	}
 }

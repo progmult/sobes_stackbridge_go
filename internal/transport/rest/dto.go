@@ -30,23 +30,29 @@ type SubscriptionRequest struct {
 // Инварианты записи проверяет model.Validate уже после разбора — на значениях,
 // которые не удалось разобрать, проверять нечего.
 func (r SubscriptionRequest) toModel(id uuid.UUID) (*model.Subscription, error) {
-	var violations []string
+	var violations []model.Violation
 
 	price := 0
 	if r.Price == nil {
-		violations = append(violations, "не указана стоимость подписки")
+		violations = append(violations, model.Violation{Field: model.FieldPrice, Message: "не указана"})
 	} else {
 		price = *r.Price
 	}
 
 	userID, err := uuid.Parse(strings.TrimSpace(r.UserID))
 	if err != nil {
-		violations = append(violations, "user_id должен быть корректным UUID")
+		violations = append(violations, model.Violation{
+			Field:   model.FieldUserID,
+			Message: "должен быть корректным UUID",
+		})
 	}
 
 	startDate, err := model.ParseDate(strings.TrimSpace(r.StartDate))
 	if err != nil {
-		violations = append(violations, "дата начала должна быть в формате MM-YYYY, например 07-2025")
+		violations = append(violations, model.Violation{
+			Field:   model.FieldStartDate,
+			Message: "должна быть в формате MM-YYYY, например 07-2025",
+		})
 	}
 
 	var endDate *time.Time
@@ -54,7 +60,10 @@ func (r SubscriptionRequest) toModel(id uuid.UUID) (*model.Subscription, error) 
 	if strings.TrimSpace(r.EndDate) != "" {
 		parsed, err := model.ParseDate(strings.TrimSpace(r.EndDate))
 		if err != nil {
-			violations = append(violations, "дата окончания должна быть в формате MM-YYYY, например 12-2025")
+			violations = append(violations, model.Violation{
+				Field:   model.FieldEndDate,
+				Message: "должна быть в формате MM-YYYY, например 12-2025",
+			})
 		} else {
 			endDate = &parsed
 		}
@@ -130,7 +139,30 @@ type ErrorResponse struct {
 	Code string `json:"code" example:"validation_error"`
 	// Пояснение для человека на русском, без внутренних деталей реализации.
 	Message string `json:"message" example:"некорректный запрос: стоимость подписки не может быть отрицательной"`
-	// Перечень нарушений, если их несколько. Заполняется при проверке тела
-	// запроса, чтобы клиент увидел все проблемные поля разом.
-	Details []string `json:"details,omitempty" example:"название сервиса не может быть пустым,стоимость подписки не может быть отрицательной"`
+	// Перечень нарушений с указанием полей. Заполняется при проверке тела
+	// запроса, чтобы клиент увидел все проблемные поля разом и мог подсветить
+	// каждое у себя в форме.
+	Details []ViolationResponse `json:"details,omitempty"`
+}
+
+// ViolationResponse — одно нарушение: имя поля и что с ним не так.
+type ViolationResponse struct {
+	// Имя поля из тела запроса.
+	Field string `json:"field" example:"price"`
+	// Что нарушено, формулировка относительно поля.
+	Message string `json:"message" example:"не может быть отрицательной"`
+}
+
+// newViolationResponses переводит нарушения из домена в представление ответа.
+func newViolationResponses(violations []model.Violation) []ViolationResponse {
+	if len(violations) == 0 {
+		return nil
+	}
+
+	details := make([]ViolationResponse, 0, len(violations))
+	for _, violation := range violations {
+		details = append(details, ViolationResponse{Field: violation.Field, Message: violation.Message})
+	}
+
+	return details
 }
