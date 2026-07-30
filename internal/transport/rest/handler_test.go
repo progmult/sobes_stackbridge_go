@@ -204,6 +204,34 @@ func TestCreateReportsAllViolations(t *testing.T) {
 				{Field: "end_date", Message: "должна быть в формате MM-YYYY, например 12-2025"},
 			},
 		},
+		{
+			// Нарушения из разных этапов проверки: название не разбирается
+			// вовсе, user_id спотыкается на разборе. Раньше приходило только
+			// второе, и клиенту требовался ещё один запрос.
+			name: "инвариант и ошибка разбора вместе",
+			body: `{"service_name":"","price":400,"user_id":"не-uuid","start_date":"07-2025"}`,
+			want: []rest.ViolationResponse{
+				{Field: "service_name", Message: "не может быть пустым"},
+				{Field: "user_id", Message: "должен быть корректным UUID"},
+			},
+		},
+		{
+			name: "инвариант и отсутствующее поле вместе",
+			body: `{"service_name":"   ","user_id":"` + userID + `","start_date":"07-2025"}`,
+			want: []rest.ViolationResponse{
+				{Field: "service_name", Message: "не может быть пустым"},
+				{Field: "price", Message: "не указана"},
+			},
+		},
+		{
+			// Про неразобранное поле Validate сказал бы «не указана», но это
+			// то же нарушение менее точными словами: остаётся одно сообщение.
+			name: "поле с ошибкой разбора не дублируется",
+			body: `{"service_name":"X","price":400,"user_id":"` + userID + `","start_date":"не-дата"}`,
+			want: []rest.ViolationResponse{
+				{Field: "start_date", Message: "должна быть в формате MM-YYYY, например 07-2025"},
+			},
+		},
 	}
 
 	for _, tt := range tests {

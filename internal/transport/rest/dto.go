@@ -2,7 +2,6 @@ package rest
 
 import (
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -23,64 +22,99 @@ type SubscriptionRequest struct {
 	EndDate string `json:"end_date,omitempty" example:"12-2025"`
 }
 
-// toModel переводит тело запроса в доменную модель, проверяя формат полей.
-// Разбор не прекращается на первой ошибке: клиент получает перечень всех
-// полей, которые надо починить.
-//
-// Инварианты записи проверяет model.Validate уже после разбора — на значениях,
-// которые не удалось разобрать, проверять нечего.
-func (r SubscriptionRequest) toModel(id uuid.UUID) (*model.Subscription, error) {
-	var violations []model.Violation
+// fieldOrder задаёт порядок полей в перечне нарушений — тот же, что в теле
+// запроса. Без него порядок зависел бы от того, на каком этапе поле споткнулось.
+var fieldOrder = []string{
+	model.FieldServiceName,
+	model.FieldPrice,
+	model.FieldUserID,
+	model.FieldStartDate,
+	model.FieldEndDate,
+}
 
-	price := 0
+// toModel переводит тело запроса в доменную модель, проверяя поля. Проверка не
+// прекращается на первой ошибке: клиент получает перечень всех полей, которые
+// надо починить, за один запрос.
+//
+// Этапов два — разбор строк здесь и инварианты в model.Validate, — но ранний
+// возврат между ними не делается: запись собирается из того, что разобралось,
+// и проверяется целиком. Иначе пустое название молчало бы, пока клиент чинит
+// формат даты в соседнем поле.
+func (r SubscriptionRequest) toModel(id uuid.UUID) (*model.Subscription, error) {
+	// Пробелы срезаются до проверки, иначе название из одних пробелов прошло бы
+	// как непустое.
+	sub := &model.Subscription{ID: id, ServiceName: strings.TrimSpace(r.ServiceName)}
+
+	var parseViolations []model.Violation
+
 	if r.Price == nil {
-		violations = append(violations, model.Violation{Field: model.FieldPrice, Message: "не указана"})
+		parseViolations = append(parseViolations, model.Violation{Field: model.FieldPrice, Message: "не указана"})
 	} else {
-		price = *r.Price
+		sub.Price = *r.Price
 	}
 
-	userID, err := uuid.Parse(strings.TrimSpace(r.UserID))
-	if err != nil {
-		violations = append(violations, model.Violation{
+	if userID, err := uuid.Parse(strings.TrimSpace(r.UserID)); err != nil {
+		parseViolations = append(parseViolations, model.Violation{
 			Field:   model.FieldUserID,
 			Message: "должен быть корректным UUID",
 		})
+	} else {
+		sub.UserID = userID
 	}
 
-	startDate, err := model.ParseDate(strings.TrimSpace(r.StartDate))
-	if err != nil {
-		violations = append(violations, model.Violation{
+	if startDate, err := model.ParseDate(strings.TrimSpace(r.StartDate)); err != nil {
+		parseViolations = append(parseViolations, model.Violation{
 			Field:   model.FieldStartDate,
 			Message: "должна быть в формате MM-YYYY, например 07-2025",
 		})
+	} else {
+		sub.StartDate = startDate
 	}
 
-	var endDate *time.Time
-
 	if strings.TrimSpace(r.EndDate) != "" {
-		parsed, err := model.ParseDate(strings.TrimSpace(r.EndDate))
-		if err != nil {
-			violations = append(violations, model.Violation{
+		if endDate, err := model.ParseDate(strings.TrimSpace(r.EndDate)); err != nil {
+			parseViolations = append(parseViolations, model.Violation{
 				Field:   model.FieldEndDate,
 				Message: "должна быть в формате MM-YYYY, например 12-2025",
 			})
 		} else {
-			endDate = &parsed
+			sub.EndDate = &endDate
 		}
 	}
 
-	if err := model.NewValidationError(violations...); err != nil {
+	if err := model.NewValidationError(mergeViolations(parseViolations, model.Violations(sub.Validate()))...); err != nil {
 		return nil, err
 	}
 
-	return &model.Subscription{
-		ID:          id,
-		ServiceName: r.ServiceName,
-		Price:       price,
-		UserID:      userID,
-		StartDate:   startDate,
-		EndDate:     endDate,
-	}, nil
+	return sub, nil
+}
+
+// mergeViolations сводит нарушения обоих этапов проверки: по каждому полю
+// остаётся одно, из первой группы, где оно встретилось.
+//
+// Порядок групп поэтому важен: у неразобранного поля Validate видит нулевое
+// значение и скажет «не указано», хотя точная причина — формат. Побеждает
+// сообщение о разборе.
+func mergeViolations(groups ...[]model.Violation) []model.Violation {
+	byField := make(map[string]model.Violation, len(fieldOrder))
+
+	for _, group := range groups {
+		for _, violation := range group {
+			if _, reported := byField[violation.Field]; !reported {
+				byField[violation.Field] = violation
+			}
+		}
+	}
+
+	merged := make([]model.Violation, 0, len(byField))
+
+	for _, field := range fieldOrder {
+		if violation, ok := byField[field]; ok {
+			merged = append(merged, violation)
+		}
+	}
+
+	return merged
 }
 
 // SubscriptionResponse — представление подписки в ответах API.
@@ -138,7 +172,7 @@ type ErrorResponse struct {
 	// Код ошибки для обработки на клиенте.
 	Code string `json:"code" example:"validation_error"`
 	// Пояснение для человека на русском, без внутренних деталей реализации.
-	Message string `json:"message" example:"некорректный запрос: стоимость подписки не может быть отрицательной"`
+	Message string `json:"message" example:"некорректный запрос: price: не может быть отрицательной"`
 	// Перечень нарушений с указанием полей. Заполняется при проверке тела
 	// запроса, чтобы клиент увидел все проблемные поля разом и мог подсветить
 	// каждое у себя в форме.
